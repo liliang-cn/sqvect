@@ -1138,7 +1138,7 @@ listing that produced them, so handing a `memory_list_all` cursor to
 `graph_list_all`, or the reverse, fails loudly rather than silently returning
 the wrong page.
 
-## OpenClaw and Hermes Plugins
+## OpenClaw, Hermes and DeepSeek Harness Plugins
 
 Native host-memory adapters live under `plugins/`:
 
@@ -1146,8 +1146,16 @@ Native host-memory adapters live under `plugins/`:
   capability and CortexDB recall/store/delete tools.
 - `plugins/hermes-cortexdb-memory` registers Hermes Agent's `MemoryProvider`
   with automatic prefetch and completed-turn synchronization.
+- `plugins/dsh-cortexdb-memory` (npm `cortexdb-dsh-memory`) is a DeepSeek
+  Harness cordis bundle: recall on `agent/pre-step` for each typed prompt,
+  session capture through `cortexdb-mcp --capture-session` (memories under
+  `auto:dsh-<session>:`), and `cortexdb_memory_search` / `_store` / `_forget`
+  tools. It speaks gRPC over `node:http2` with no runtime dependencies, because
+  dsh installs plugins with pnpm, which refuses unapproved build scripts such
+  as protobufjs's. Past dsh sessions import through `import_agent_memory`'s
+  `dsh_sessions` source.
 
-Both adapters call the existing gRPC `ToolsService` and prefer
+All adapters call the existing gRPC `ToolsService` and prefer
 `knowledge_memory_recall`; do not implement a separate retrieval or storage path
 inside an agent plugin. The `skills/cortexdb-memory-*` directories remain the
 lighter explicit-tool integration.

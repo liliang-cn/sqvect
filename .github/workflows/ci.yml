@@ -58,8 +58,9 @@ jobs:
           codex_ver=$(extract plugins/cortexdb/.codex-plugin/plugin.json)
           live_ver=$(extract plugins/cortexdb-live/.claude-plugin/plugin.json)
           market_ver=$(extract .claude-plugin/marketplace.json)
-          echo "version.go=$go_ver claude=$claude_ver codex=$codex_ver live=$live_ver marketplace=$market_ver"
-          for v in "$claude_ver" "$codex_ver" "$live_ver" "$market_ver"; do
+          dsh_ver=$(extract plugins/dsh-cortexdb-memory/package.json)
+          echo "version.go=$go_ver claude=$claude_ver codex=$codex_ver live=$live_ver marketplace=$market_ver dsh=$dsh_ver"
+          for v in "$claude_ver" "$codex_ver" "$live_ver" "$market_ver" "$dsh_ver"; do
             if [ "$v" != "$go_ver" ]; then
               echo "::error::Version mismatch: version.go ($go_ver) must match all plugin manifests. The MCP launcher pins its binary download to the plugin version, so a stale manifest ships a stale server."
               exit 1
@@ -110,6 +111,25 @@ jobs:
         env:
           CORTEXDB_GRPC_BIN: ${{ github.workspace }}/clients/rust/target/cortexdb-grpc
         run: cargo test --all-features
+
+  dsh-plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/dsh-cortexdb-memory
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Test
+        run: |
+          npm ci --ignore-scripts
+          npm test
 
   release:
     needs: test
@@ -178,3 +198,36 @@ jobs:
             dist/cortexdb-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The DeepSeek Harness plugin downloads the release binaries of its own
+  # version, so it is published with the release, after they are uploaded.
+  publish-dsh-plugin:
+    needs: [release-sidecar, dsh-plugin]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/dsh-cortexdb-memory
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish cortexdb-dsh-memory to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "NPM_TOKEN not set — skipping npm publish"; exit 0
+          fi
+          V=$(node -p "require('./package.json').version")
+          if npm view "cortexdb-dsh-memory@${V}" version >/dev/null 2>&1; then
+            echo "cortexdb-dsh-memory@${V} already on npm — skipping"; exit 0
+          fi
+          npm publish --access public

@@ -16,15 +16,15 @@ package main
 // CORTEXDB_REMOTE said, so on a shared brain an import landed somewhere nobody
 // would read it, and said it had succeeded.
 //
-// Five sources, three by default:
+// Six sources, three by default:
 //
 //   - claude_memory: the file-based notes, saved as knowledge (as before).
 //   - instructions: CLAUDE.md / AGENTS.md at each root.
 //   - codex_memory: Codex's own memory — the per-session memories in
 //     memories_1.sqlite (stage1_outputs) and the notes under ~/.codex/memories.
-//   - claude_sessions / codex_sessions: past transcripts, distilled into
-//     memories the way a session is captured when it ends (same prompt, same
-//     ids). Opt-in: each session is a model call, so a call does a few
+//   - claude_sessions / codex_sessions / dsh_sessions: past transcripts,
+//     distilled into memories the way a session is captured when it ends (same
+//     prompt, same ids). Opt-in: each session is a model call, so a call does a few
 //     (max_sessions), remembers which it has done, and says how many are left.
 //
 // Every id is stable, so running it again refreshes what it wrote instead of
@@ -60,6 +60,7 @@ const (
 	srcCodexMemory    = "codex_memory"
 	srcClaudeSessions = "claude_sessions"
 	srcCodexSessions  = "codex_sessions"
+	srcDshSessions    = "dsh_sessions"
 
 	// defaultMaxSessions is how many transcripts one call distils. Each is a
 	// model call of up to a minute; a tool call that runs for an hour is one
@@ -145,11 +146,11 @@ func (r remoteBrain) SearchMemory(ctx context.Context, req cortexdb.MemorySearch
 }
 
 type importAgentMemoryIn struct {
-	Sources     []string `json:"sources,omitempty" jsonschema:"what to import: claude_memory, instructions, codex_memory (the default three), claude_sessions, codex_sessions"`
+	Sources     []string `json:"sources,omitempty" jsonschema:"what to import: claude_memory, instructions, codex_memory (the default three), claude_sessions, codex_sessions, dsh_sessions"`
 	Since       string   `json:"since,omitempty" jsonschema:"sessions only: those modified after this, an RFC 3339 date (2026-09-01) or a span back from now (30d, 12h)"`
 	MaxSessions int      `json:"max_sessions,omitempty" jsonschema:"sessions only: how many transcripts to distil in this call (default 5); call again for the rest"`
 	DryRun      bool     `json:"dry_run,omitempty" jsonschema:"count what would be imported and write nothing"`
-	Roots       []string `json:"roots,omitempty" jsonschema:"homes to scan instead of ~/.claude and ~/.codex"`
+	Roots       []string `json:"roots,omitempty" jsonschema:"homes to scan for notes and instructions instead of ~/.claude and ~/.codex"`
 }
 
 type importSourceOut struct {
@@ -217,8 +218,10 @@ func (a agentImport) run(ctx context.Context, in importAgentMemoryIn) (importAge
 			res, err = a.importSessions(ctx, src, listClaudeSessions(claudeHome), since, maxSessions, in.DryRun)
 		case srcCodexSessions:
 			res, err = a.importSessions(ctx, src, listCodexSessions(codexHome), since, maxSessions, in.DryRun)
+		case srcDshSessions:
+			res, err = a.importSessions(ctx, src, listDshSessions(dshHome(a.home)), since, maxSessions, in.DryRun)
 		default:
-			return out, fmt.Errorf("unknown source %q: want claude_memory, instructions, codex_memory, claude_sessions or codex_sessions", src)
+			return out, fmt.Errorf("unknown source %q: want claude_memory, instructions, codex_memory, claude_sessions, codex_sessions or dsh_sessions", src)
 		}
 		if err != nil {
 			return out, err
@@ -399,13 +402,36 @@ func (a agentImport) importCodexMemory(ctx context.Context, codexHome string, dr
 
 // transcript is one past session on disk.
 type transcript struct {
-	Kind     string // claude or codex
+	Kind     string // claude, codex or dsh
 	ID       string
 	Path     string
 	Modified time.Time
 }
 
 func (t transcript) key() string { return t.Kind + ":" + t.ID }
+
+// digest reduces the transcript to the conversation, in its agent's format.
+func (t transcript) digest() (string, int, error) {
+	switch t.Kind {
+	case "codex":
+		return digestCodexRollout(t.Path)
+	case "dsh":
+		digest, turns, _, err := digestDshSession(t.Path)
+		return digest, turns, err
+	}
+	return digestTranscript(t.Path)
+}
+
+// idPrefix is what every memory distilled from this transcript starts with.
+func (t transcript) idPrefix() string {
+	switch t.Kind {
+	case "codex":
+		return codexIDPrefix(t.ID)
+	case "dsh":
+		return dshIDPrefix(t.ID)
+	}
+	return capturedIDPrefix(t.ID)
+}
 
 // listClaudeSessions finds Claude Code's transcripts. Subagent transcripts live
 // in folders beside them and are left out: they are a session's own working,
@@ -526,13 +552,7 @@ func (a agentImport) importSessions(ctx context.Context, src string, all []trans
 			break
 		}
 		max--
-		digest, turns := "", 0
-		var derr error
-		if t.Kind == "codex" {
-			digest, turns, derr = digestCodexRollout(t.Path)
-		} else {
-			digest, turns, derr = digestTranscript(t.Path)
-		}
+		digest, turns, derr := t.digest()
 		if derr != nil {
 			return res, fmt.Errorf("read %s: %w", t.Path, derr)
 		}
@@ -543,10 +563,7 @@ func (a agentImport) importSessions(ctx context.Context, src string, all []trans
 			if err != nil {
 				return res, fmt.Errorf("distil %s: %w", t.key(), err)
 			}
-			prefix := capturedIDPrefix(t.ID)
-			if t.Kind == "codex" {
-				prefix = codexIDPrefix(t.ID)
-			}
+			prefix := t.idPrefix()
 			// A failed check retires nothing; the facts are still saved.
 			plan, _ := reconcileFacts(ctx, a.llm, a.w, facts, prefix, t.Modified)
 			date := t.Modified.Format("2006-01-02")
@@ -653,10 +670,10 @@ func sessionStatePath(home string) string {
 	return filepath.Join(home, ".cortexdb", "imported-sessions.json")
 }
 
-const importAgentMemoryDescription = "Import the memory a person already has from Claude Code and Codex into this brain, so recall finds it: " +
+const importAgentMemoryDescription = "Import the memory a person already has from Claude Code, Codex and DeepSeek Harness into this brain, so recall finds it: " +
 	"Claude Code's memory notes (~/.claude/projects/*/memory/*.md), CLAUDE.md / AGENTS.md, and Codex's own memories " +
-	"(~/.codex/memories_1.sqlite and ~/.codex/memories) — the default sources. With claude_sessions / codex_sessions it " +
-	"also distils past session transcripts into memories (a model call each, so a few per call: run it again until " +
+	"(~/.codex/memories_1.sqlite and ~/.codex/memories) — the default sources. With claude_sessions / codex_sessions / " +
+	"dsh_sessions (DeepSeek Harness, $DSH_HOME or ~/.dsh) it also distils past session transcripts into memories (a model call each, so a few per call: run it again until " +
 	"nothing is pending). Reads files on the machine this MCP server runs on and writes to the brain it is connected " +
 	"to, local or shared. Run with dry_run first to show the person what would be imported. Every id is stable, so " +
 	"running it again refreshes rather than duplicates."
@@ -665,7 +682,7 @@ func addImportAgentMemoryTool(server *mcp.Server, w brainClient, brain string) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "import_agent_memory",
 		Description: importAgentMemoryDescription,
-		Annotations: &mcp.ToolAnnotations{Title: "Import existing Claude Code / Codex memory"},
+		Annotations: &mcp.ToolAnnotations{Title: "Import existing Claude Code / Codex / dsh memory"},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in importAgentMemoryIn) (*mcp.CallToolResult, importAgentMemoryOut, error) {
 		home, err := os.UserHomeDir()
 		if err != nil {

@@ -25,8 +25,10 @@ import (
 // focused memory is findable by exactly the question it answers.
 //
 // `--capture-session [transcript.jsonl] [--dry-run]`. Without a path it reads
-// the hook payload from stdin. Requires CORTEXDB_LLM_* (exits quietly
-// otherwise — capture is opt-in by configuration, not by flag).
+// the hook payload from stdin. A Claude Code transcript and a dsh session log
+// (session.vN.jsonl[.zstd], see dsh_sessions.go) are both read. Requires
+// CORTEXDB_LLM_* (exits quietly otherwise — capture is opt-in by
+// configuration, not by flag).
 func runCaptureSession(args []string) {
 	transcriptPath := ""
 	sessionID := ""
@@ -53,9 +55,6 @@ func runCaptureSession(args []string) {
 	if transcriptPath == "" {
 		return
 	}
-	if sessionID == "" {
-		sessionID = strings.TrimSuffix(filepath.Base(transcriptPath), filepath.Ext(transcriptPath))
-	}
 
 	llm := newOrganizeLLM()
 	if llm == nil {
@@ -63,7 +62,21 @@ func runCaptureSession(args []string) {
 		return
 	}
 
-	digest, userTurns, err := digestTranscript(transcriptPath)
+	t := transcript{Kind: "claude", ID: sessionID, Path: transcriptPath}
+	var digest string
+	var userTurns int
+	var err error
+	if isDshSessionLog(transcriptPath) {
+		var headerID string
+		t.Kind = "dsh"
+		digest, userTurns, headerID, err = digestDshSession(transcriptPath)
+		t.ID = dshSessionID(firstNonEmptyStr(t.ID, headerID))
+	} else {
+		if t.ID == "" {
+			t.ID = strings.TrimSuffix(filepath.Base(transcriptPath), filepath.Ext(transcriptPath))
+		}
+		digest, userTurns, err = digestTranscript(transcriptPath)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cortexdb: capture: %v\n", err)
 		os.Exit(1)
@@ -93,7 +106,8 @@ func runCaptureSession(args []string) {
 	}
 	defer closeBrain()
 	now := time.Now()
-	plan, err := reconcileFacts(ctx, llm, brain, facts, capturedIDPrefix(sessionID), now)
+	prefix := t.idPrefix()
+	plan, err := reconcileFacts(ctx, llm, brain, facts, prefix, now)
 	if err != nil {
 		// Saving without retiring anything is what capture always did.
 		fmt.Fprintf(os.Stderr, "cortexdb: capture: checking for outdated memories: %v\n", err)
@@ -102,9 +116,13 @@ func runCaptureSession(args []string) {
 	date := now.Format("2006-01-02")
 	saved, retired := 0, 0
 	for _, f := range facts {
-		req := capturedRequest(sessionID, date, f)
+		req := capturedRequest(t.ID, date, f)
+		req.MemoryID = prefix + f.Slug
 		if req.Content == "" {
 			continue
+		}
+		if t.Kind != "claude" {
+			req.Metadata["agent"] = t.Kind
 		}
 		if !plan.apply(f.Slug, &req) {
 			fmt.Printf("outdated %s (contradicted by %s): %s\n", req.MemoryID, plan.Outdated[f.Slug], clip(req.Content, 120))

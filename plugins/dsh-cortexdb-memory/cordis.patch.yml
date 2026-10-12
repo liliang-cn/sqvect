@@ -1,0 +1,8 @@
+# CortexDB memory over the profile it is installed into. One entry: recall
+# before each prompt, capture when a session goes quiet or ends, and the
+# cortexdb_memory_* tools. Override any field from the profile's own
+# cordis.patch.yml with `- id: cortexdb-memory` and a `config:` block.
+
+- insert:
+    - id: cortexdb-memory
+      name: cortexdb-dsh-memory

@@ -40,14 +40,14 @@ func openBrainWriter() (w brainClient, label string, db *cortexdb.DB, closeFn fu
 //
 //	--import-agent-memory [--sessions] [--since 30d] [--max N] [--dry-run] [roots...]
 //
-// --sessions adds past Claude Code and Codex transcripts to the default
+// --sessions adds past Claude Code, Codex and dsh transcripts to the default
 // sources. Bare arguments are roots to scan instead of ~/.claude and ~/.codex.
 func runImportAgentMemory(args []string) {
 	var in importAgentMemoryIn
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; a {
 		case "--sessions":
-			in.Sources = append(append([]string{}, defaultImportSources...), srcClaudeSessions, srcCodexSessions)
+			in.Sources = append(append([]string{}, defaultImportSources...), srcClaudeSessions, srcCodexSessions, srcDshSessions)
 		case "--dry-run":
 			in.DryRun = true
 		case "--since", "--max":

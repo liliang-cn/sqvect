@@ -14,6 +14,7 @@
 | Claude Code | `/plugin marketplace add liliang-cn/cortexdb`，再 `/plugin install cortexdb@cortexdb` |
 | Codex | `codex plugin marketplace add liliang-cn/cortexdb && codex plugin add cortexdb@cortexdb` |
 | Claude Code mod（可选） | `/plugin install cortexdb-live@cortexdb` |
+| DeepSeek Harness | `dsh plugin --profile web add cortexdb-dsh-memory`（[说明](plugins/dsh-cortexdb-memory/README.md)） |
 | 共享大脑服务端 | `go install github.com/liliang-cn/cortexdb/v2/cmd/cortexdb-grpc@latest` |
 | 客户端 | `cargo add cortexdb-client` · `pip install cortexdb-client` · `npm install cortexdb-client` |
 
@@ -70,7 +71,7 @@ haiku 用的是 Claude Code 自己的模型额度，不需要 API key。语言�
 - Palantir 风格的 ontology，带受治理的动作
 - 80+ 工具，进程内调用或走 MCP
 - `serve_graph_3d`：实时 3D 视图，可查找、提问、查询、展开，桌面和手机都能用；也可以切成图书馆，每条记忆是它所属项目书架上的一本书
-- `import_agent_memory`：把 Claude Code 和 Codex 已有的记忆导进来——记忆笔记、`CLAUDE.md` / `AGENTS.md`、Codex 的记忆库，也可以把历史会话提炼成记忆——本地大脑和共享大脑都行
+- `import_agent_memory`：把 Claude Code、Codex 和 DeepSeek Harness 已有的记忆导进来——记忆笔记、`CLAUDE.md` / `AGENTS.md`、Codex 的记忆库，也可以把历史会话提炼成记忆——本地大脑和共享大脑都行
 - 变更事件流：每次已提交的写入，按顺序、恰好一次
 - 默认 SQLite，换成 `postgres://` DSN 就跑在 PostgreSQL + pgvector 上
 
