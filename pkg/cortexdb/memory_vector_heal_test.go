@@ -113,10 +113,12 @@ func TestHealerBacksOffWhileTheEmbedderIsDown(t *testing.T) {
 	}
 	saves := emb.calls.Load() // one Embed per save
 	time.Sleep(700 * time.Millisecond)
-	// Backoff 50, 100, 200, 200, 200 ms: about five passes in 700ms. A loop
-	// without backoff makes thousands.
-	if passes := emb.calls.Load() - saves; passes > 8 {
-		t.Fatalf("%d embedder calls in 700ms while it was down: the healer is not backing off", passes)
+	// Backoff 50, 100, 200, 200, 200 ms: about five passes in 700ms, and each
+	// pass is two embedder calls — 21 memories in batches of 16. On an idle
+	// machine fewer passes fit; under load all five do. A loop without backoff
+	// makes thousands.
+	if calls := emb.calls.Load() - saves; calls > 12 {
+		t.Fatalf("%d embedder calls in 700ms while it was down: the healer is not backing off", calls)
 	}
 }
 
