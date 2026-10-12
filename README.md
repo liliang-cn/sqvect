@@ -86,6 +86,8 @@ Haiku runs on Claude Code's own model access, so no API key is needed. Language:
 | `CORTEXDB_GRPC_ADDR` | Server listen address (default `127.0.0.1:47821`) |
 | `CORTEXDB_EMBED_BASE_URL` | OpenAI-compatible embeddings endpoint; unset = lexical mode |
 | `CORTEXDB_EMBED_MODEL` / `CORTEXDB_EMBED_DIM` | Embedding model and dimension |
+| `CORTEXDB_SLOW_MS` | Server: log calls slower than this, with the time each stage took (default `1000`, `0` = none) |
+| `CORTEXDB_TRACE` / `CORTEXDB_TRACE_FILE` | Server: log every call; also append the records to a JSON-lines file |
 
 ## Docs
 

@@ -100,7 +100,7 @@ Retrieval mode `ppr` runs Personalized PageRank (HippoRAG 2 style) from the enti
 
 The live view (`serve_graph_3d`) can be asked, not only looked at: find any node in the store, ask a question and see what the answer names, run read-only Cypher, expand a node's neighbours past the drawn core. It is read-only, works on a phone, has light and dark themes, and opens wherever its link says (`?focus=`, `?ask=`, `?cypher=`, `?find=`, `?type=`, `?edge=`, `?theme=`, `?mode=`). The same server draws the brain as a library (`library_url` in the result, or `view=library`): each memory is a book on the shelf of the project it names, shelves group into wings by their projects' relations, an entity is an index card listing every book that mentions it, and a book opens on a lectern with its text, index and see-also.
 
-`import_agent_memory` brings in the memory a person already has, so a new brain does not start empty. By default it imports Claude Code's memory notes (`~/.claude/projects/*/memory/*.md`), `CLAUDE.md` / `AGENTS.md`, and Codex's own memories (`~/.codex/memories_1.sqlite` and the notes in `~/.codex/memories`). With `sources: ["claude_sessions", "codex_sessions"]` it also distils past transcripts into memories, the way a session is captured when it ends. Each transcript is a model call (`CORTEXDB_LLM_*`), so one call does `max_sessions` (default 5) and says how many are left; `since` limits the window (`30d`, `2026-09-01`), and `~/.cortexdb/imported-sessions.json` keeps a transcript from being read twice. Like `render_graph_html` it runs where the MCP server runs, because that is where the files are, and writes to whichever brain the server uses, local or shared. `dry_run` counts first; ids are stable, so running it again refreshes rather than duplicates. From a shell: `cortexdb-mcp --import-agent-memory [--sessions] [--since 30d] [--max N] [--dry-run]`.
+`import_agent_memory` brings in the memory a person already has, so a new brain does not start empty. By default it imports Claude Code's memory notes (`~/.claude/projects/*/memory/*.md`), `CLAUDE.md` / `AGENTS.md`, and Codex's own memories (`~/.codex/memories_1.sqlite` and the notes in `~/.codex/memories`). With `sources: ["claude_sessions", "codex_sessions", "dsh_sessions"]` it also distils past transcripts into memories (DeepSeek Harness sessions are read from `$DSH_HOME`, default `~/.dsh`), the way a session is captured when it ends. Each transcript is a model call (`CORTEXDB_LLM_*`), so one call does `max_sessions` (default 5) and says how many are left; `since` limits the window (`30d`, `2026-09-01`), and `~/.cortexdb/imported-sessions.json` keeps a transcript from being read twice. Like `render_graph_html` it runs where the MCP server runs, because that is where the files are, and writes to whichever brain the server uses, local or shared. `dry_run` counts first; ids are stable, so running it again refreshes rather than duplicates. From a shell: `cortexdb-mcp --import-agent-memory [--sessions] [--since 30d] [--max N] [--dry-run]`.
 
 A capture also retires what it made untrue. Each fact a session yields is looked up in the brain, and one more model call is asked which existing memories it contradicts — the same thing with a different current value, not merely the same topic. Those are saved as superseded by the new memory (`supersedes`): kept, exported, stamped `superseded_by` / `superseded_at`, and no longer recalled as current, so a wrong call is undone by clearing one key. The later date wins: a fact from a session imported months late does not retire newer memories, and is dropped if one already contradicts it. At most five memories are retired per pass, and a failed check saves everything and retires nothing. The SessionEnd capture, the cortexdb-live mod and `import_agent_memory`'s session import all do this.
 
@@ -333,7 +333,7 @@ Separate workflow toolboxes:
 - memoryflow: `memoryflow_ingest_transcript`, `memoryflow_recall`, `memoryflow_wake_up_layers`, `memoryflow_prepare_reply`
 - graphflow: `graphflow_build`, `graphflow_analyze`, `graphflow_report`, `graphflow_export`, `graphflow_run`, `global_search`, `build_community_hierarchy` (the last two are also on the `cortexdb-mcp-stdio` server)
 
-## OpenClaw and Hermes Plugins
+## OpenClaw, Hermes and DeepSeek Harness Plugins
 
 Native host-memory adapters live under `plugins/`:
 
@@ -341,8 +341,16 @@ Native host-memory adapters live under `plugins/`:
   capability and CortexDB recall/store/delete tools.
 - `plugins/hermes-cortexdb-memory` registers Hermes Agent's `MemoryProvider`
   with automatic prefetch and completed-turn synchronization.
+- `plugins/dsh-cortexdb-memory` (npm `cortexdb-dsh-memory`) is a DeepSeek
+  Harness cordis bundle: recall on `agent/pre-step` for each typed prompt,
+  session capture through `cortexdb-mcp --capture-session` (memories under
+  `auto:dsh-<session>:`), and `cortexdb_memory_search` / `_store` / `_forget`
+  tools. It speaks gRPC over `node:http2` with no runtime dependencies, because
+  dsh installs plugins with pnpm, which refuses unapproved build scripts such
+  as protobufjs's. Past dsh sessions import through `import_agent_memory`'s
+  `dsh_sessions` source.
 
-Both adapters call the existing gRPC `ToolsService` and prefer
+All adapters call the existing gRPC `ToolsService` and prefer
 `knowledge_memory_recall`; do not implement a separate retrieval or storage path
 inside an agent plugin. The `skills/cortexdb-memory-*` directories remain the
 lighter explicit-tool integration.

@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.125.0] - 2026-10-12
+
+### Added
+
+- DeepSeek Harness support. `plugins/dsh-cortexdb-memory`, published to npm
+  as `cortexdb-dsh-memory` and installed with
+  `dsh plugin --profile <profile> add cortexdb-dsh-memory`, is a cordis
+  bundle that gives dsh what the Claude Code and Codex plugins give those
+  agents: recall before each prompt a person types (the same question, top-3,
+  snippets and wording as their recall hook, across the whole brain unless
+  `scope`/`namespace`/`userId` narrow it), capture of a session's durable
+  facts when it goes quiet or ends (`auto:dsh-<session>:<slug>`, retiring the
+  memories they make untrue), and `cortexdb_memory_search` / `_store` /
+  `_forget` tools. It connects to a sidecar at `endpoint` or starts the
+  release `cortexdb-grpc` of its own version against the local database. It
+  has no runtime dependencies — gRPC is spoken over `node:http2` — because
+  dsh installs plugins with pnpm, which refuses unapproved build scripts, and
+  every gRPC library for Node brings protobufjs and its postinstall.
+- `cortexdb-mcp --capture-session` reads a dsh session log as well as a
+  Claude Code transcript, and `import_agent_memory` has a `dsh_sessions`
+  source (included by `--sessions`) that distils past sessions from
+  `$DSH_HOME` (default `~/.dsh`). dsh's logs are Zstandard-compressed JSON
+  lines; a session still being written is read up to its last complete frame.
+- The gRPC server logs every call slower than `CORTEXDB_SLOW_MS` (default
+  1000, `0` for none) with the time each stage took — embedding, vector,
+  lexical, graph — so a slow recall says which of the embedder, the index or
+  the graph it waited on. `CORTEXDB_TRACE=1` logs every call;
+  `CORTEXDB_TRACE_FILE` also appends the records as JSON lines.
+
+### Fixed
+
+- A recall waited as long as its embedder took to embed the query — 24
+  seconds when the embedder was a model on another machine that had to load
+  first. Embedding the query is bounded at 3 seconds; past it the recall
+  answers by keyword, as it did anyway once the caller gave up.
+- The live view's library had no project shelves for a local brain: loading
+  it dropped the `mentions` edges memories make, which are what shelve them.
+- `TestHealerBacksOffWhileTheEmbedderIsDown` failed on a loaded machine: it
+  allowed eight embedder calls for about five healing passes, but each pass
+  makes two (21 memories, in batches of 16).
+
 ## [2.124.0] - 2026-10-08
 
 ### Added
