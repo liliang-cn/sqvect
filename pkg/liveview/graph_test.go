@@ -105,3 +105,43 @@ func TestTheLiveGraphDrawsKnowledgeAndNotTheStoresOwnFiling(t *testing.T) {
 		t.Errorf("the picture drew %d edges, want only the one claim", len(edges))
 	}
 }
+
+// A memory names what it is about with a "mentions" edge, and that edge is
+// content: it is how the library shelves the memory under its project. The
+// local read used to drop every "mentions" with the chunks', leaving a local
+// library with no shelves while the shared brain had them.
+func TestTheLocalGraphKeepsWhatAMemoryMentions(t *testing.T) {
+	ctx := context.Background()
+	db, err := cortexdb.Open(cortexdb.DefaultConfig(filepath.Join(t.TempDir(), "mem.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.SaveMemory(ctx, cortexdb.MemorySaveRequest{
+		MemoryID: "deploy", Scope: "global", Content: "orbit-api deploys go through the release branch.",
+		Entities: []cortexdb.ToolEntityInput{{Name: "orbit-api", Type: "project"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	nodes, edges, err := LoadLocal(ctx, db.SQL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	types := map[string]string{}
+	for _, n := range nodes {
+		types[n.ID] = n.Type
+	}
+	found := false
+	for _, e := range edges {
+		if e.Label == "mentions" && types[e.Source] == "memory" && types[e.Target] == "project" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the local graph lost the memory's mentions edge to its project: %d edges", len(edges))
+	}
+	lib := BuildLibrary(nodes, edges)
+	if len(lib.Wings)+len(lib.Annex) == 0 {
+		t.Fatalf("a memory naming a project was not shelved: stacks=%d", len(lib.Stacks))
+	}
+}

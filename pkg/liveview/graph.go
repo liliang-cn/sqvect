@@ -191,6 +191,13 @@ func loadGraph(ctx context.Context, q rowQuerier, src graphSource) ([]Node, []Ed
 	edgeArgs = append(edgeArgs, src.nodeArgs...)
 	edgeArgs = append(edgeArgs, src.nodeArgs...)
 	edgeRows, err := q.QueryContext(ctx, d.Rebind(
+		// "mentions" is filing where a chunk names an entity, and those chunks
+		// are left out below anyway. A memory names what it is about with the
+		// same edge, and that is content: it is how the library shelves a
+		// memory under its project. Dropping every "mentions" left a local
+		// library with no shelves at all, while the shared brain, read through
+		// graph_list_all, had them.
+		//
 		// "next" is dropped only where it wires one chunk to the next, which is
 		// document layout. It is also the most natural name for one step
 		// following another, and blanket-skipping the type meant a caller who
@@ -200,7 +207,8 @@ func loadGraph(ctx context.Context, q rowQuerier, src graphSource) ([]Node, []Ed
 		 FROM `+src.edges+` AS e
 		 JOIN `+src.nodes+` AS f ON f.id = e.from_node_id
 		 JOIN `+src.nodes+` AS t ON t.id = e.to_node_id
-		 WHERE `+notIn("COALESCE(e.edge_type,'')", graph.BookkeepingEdgeTypes)+`
+		 WHERE (`+notIn("COALESCE(e.edge_type,'')", graph.BookkeepingEdgeTypes)+`
+		        OR (COALESCE(e.edge_type,'') = 'mentions' AND COALESCE(f.node_type,'') = 'memory'))
 		   AND `+notIn("COALESCE(f.node_type,'')", graph.BookkeepingNodeTypes)+`
 		   AND `+notIn("COALESCE(t.node_type,'')", graph.BookkeepingNodeTypes)+``), edgeArgs...)
 	if err != nil {
