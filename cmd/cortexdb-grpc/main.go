@@ -133,11 +133,15 @@ func main() {
 		log.Fatalf("listen %s: %v", *addr, err)
 	}
 	srv, err := rpcserver.NewWithPolicy(db, rpcserver.Options{
-		Token:        *token,
-		KeyFile:      *keys,
-		DBPath:       *dbPath,
-		BackupDir:    *backup,
-		Interceptors: []grpc.UnaryServerInterceptor{rpcserver.MetricsInterceptor(metrics)},
+		Token:     *token,
+		KeyFile:   *keys,
+		DBPath:    *dbPath,
+		BackupDir: *backup,
+		Interceptors: []grpc.UnaryServerInterceptor{
+			rpcserver.MetricsInterceptor(metrics),
+			// Inside the metrics, so its stages belong to the call it logs.
+			rpcserver.RequestLogInterceptor(rpcserver.TraceOptionsFromEnv()),
+		},
 	})
 	if err != nil {
 		// A policy that will not load must stop the process here. Starting

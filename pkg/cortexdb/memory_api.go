@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 	"log"
 	"math"
 	"sort"
@@ -190,6 +191,9 @@ func (db *DB) GetMemory(ctx context.Context, req MemoryGetRequest) (*MemoryGetRe
 }
 
 // SearchMemory searches a resolved memory bucket, using semantic session search when an embedder is available.
+// queryEmbedTimeout bounds embedding a recall's query; see searchMemory.
+var queryEmbedTimeout = 3 * time.Second
+
 func (db *DB) SearchMemory(ctx context.Context, req MemorySearchRequest) (*MemorySearchResponse, error) {
 	return db.searchMemory(ctx, req, true)
 }
@@ -272,7 +276,13 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 	// a nearest neighbour to every question ever asked.
 	var semanticHits []MemorySearchHit
 	if db.HasEmbedder() && resolution.Decision.EffectiveMode == RetrievalModeAuto {
-		queryVec, err := db.embedder.Embed(ctx, resolution.Plan.Query)
+		// Bounded: a recall waits on this, and the embedder can be a model on
+		// another machine that has to load first. Past the bound the recall
+		// answers by keyword, which is what it did anyway once the caller gave
+		// up — only now it is 3 seconds in, not 24.
+		embedCtx, cancelEmbed := context.WithTimeout(ctx, queryEmbedTimeout)
+		queryVec, err := db.embedder.Embed(embedCtx, resolution.Plan.Query)
+		cancelEmbed()
 		if err != nil {
 			log.Printf("cortexdb: memory semantic embed fallback to lexical: %v", err)
 			// Said in the answer too, not only the log: the decision used to
@@ -288,7 +298,9 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 			// Wider than topK on purpose: boosts reorder, and a memory just
 			// below the raw-similarity cut is exactly the one importance or
 			// recency should be able to lift into view.
+			doneVector := observability.Time(ctx, "vector")
 			scored, searchErr := db.store.SearchChatHistoryScored(ctx, queryVec, bucketID, req.TopK*4)
+			doneVector()
 			if searchErr != nil {
 				log.Printf("cortexdb: memory semantic search fallback to lexical: %v", searchErr)
 			} else {
@@ -320,7 +332,9 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 	// degrades to the old behaviour instead of returning nothing.
 	var graphHits []MemorySearchHit
 	if resolution.Decision.EffectiveMode == RetrievalModeGraph && resolution.Decision.UseGraph {
+		doneGraph := observability.Time(ctx, "graph")
 		graphHits, err = db.searchMemoryGraph(ctx, bucketID, resolution.Plan.EntityNames, req.TopK)
+		doneGraph()
 		if err != nil {
 			return nil, err
 		}
@@ -338,7 +352,9 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 		}
 	}
 
+	doneLexical := observability.Time(ctx, "lexical")
 	hits, err := db.searchMemoryLexical(ctx, bucketID, resolution.Plan.Query, resolution.Plan.Keywords, resolution.Plan.AlternateQueries, req.TopK)
+	doneLexical()
 	if err != nil {
 		if len(semanticHits) == 0 {
 			return nil, err

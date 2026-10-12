@@ -257,7 +257,7 @@ func Open(config Config, opts ...Option) (*DB, error) {
 		opt(db)
 	}
 	if db.embedder != nil {
-		db.embedder = watchedEmbedder{Embedder: db.embedder, heal: &db.heal}
+		db.embedder = timedEmbedder{watchedEmbedder{Embedder: db.embedder, heal: &db.heal}}
 	}
 
 	if err := db.startChangeRuntime(ctx); err != nil {

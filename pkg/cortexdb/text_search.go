@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 	"github.com/liliang-cn/cortexdb/v2/pkg/sqldialect"
 	"log"
 	"sort"
@@ -190,6 +191,7 @@ func (db *DB) SearchTextInCollection(ctx context.Context, collection string, que
 		TopK:       topK,
 		QueryText:  query,
 	}
+	defer observability.Time(ctx, "vector")()
 	return db.store.Search(ctx, vec, opts)
 }
 
@@ -539,6 +541,7 @@ func ftsSearchQuery(d sqldialect.Dialect, query string, opts TextSearchOptions) 
 }
 
 func (db *DB) ftsSearch(ctx context.Context, query string, opts TextSearchOptions) ([]core.ScoredEmbedding, error) {
+	defer observability.Time(ctx, "lexical")()
 	querySQL, args := ftsSearchQuery(db.Dialect(), query, opts)
 	rows, err := db.query(ctx, querySQL, args...)
 	if err != nil {
