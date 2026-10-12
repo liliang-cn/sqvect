@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/liliang-cn/cortexdb/v2/pkg/graph"
+	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 )
 
 const (
@@ -46,6 +47,7 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 	var memoryResp *MemorySearchResponse
 	if !req.DisableMemory {
 		var err error
+		done := observability.Time(ctx, "memory-search")
 		memoryResp, err = b.db.SearchMemory(ctx, MemorySearchRequest{
 			Query:            query,
 			UserID:           req.UserID,
@@ -59,6 +61,7 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 			Plan:             req.Plan,
 			PPR:              req.PPR,
 		})
+		done()
 		if err != nil {
 			return nil, err
 		}
@@ -70,6 +73,7 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 	var knowledgeResp *KnowledgeSearchResponse
 	if !req.DisableKnowledge {
 		var err error
+		done := observability.Time(ctx, "knowledge-search")
 		knowledgeResp, err = b.db.SearchKnowledge(ctx, KnowledgeSearchRequest{
 			Query:               query,
 			Collection:          req.Collection,
@@ -92,6 +96,7 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 			Plan:                req.Plan,
 			PPR:                 req.PPR,
 		})
+		done()
 		if err != nil {
 			return nil, err
 		}
@@ -105,7 +110,9 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 	// Fold edge-accurate graph traversal into recall so relational questions are
 	// answered from graph edges, not just lexical chunk text.
 	graphSeeds := append(append([]string{}, req.EntityNames...), resp.Entities...)
+	doneFacts := observability.Time(ctx, "graph-facts")
 	resp.GraphFacts = b.collectGraphFacts(ctx, query, graphSeeds)
+	doneFacts()
 	resp.ContextPack = buildKnowledgeMemoryContextPack(query, resp.Memories, knowledgeResp, resp.Entities, resp.GraphFacts, req.MaxMemoryItems, req.MaxMemoryChars)
 	if len(resp.Entities) == 0 {
 		resp.Entities = resp.ContextPack.Entities

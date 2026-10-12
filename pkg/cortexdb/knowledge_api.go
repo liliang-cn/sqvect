@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
+	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 )
 
 type knowledgeIngestResult struct {
@@ -215,7 +216,9 @@ func (db *DB) SearchKnowledge(ctx context.Context, req KnowledgeSearchRequest) (
 	// AlternateQueries/Keywords into the request before planning, and capture the
 	// hypothetical document to steer the semantic query vector below. Best-effort:
 	// hydeDoc is "" when no transformer is set or it declined/errored.
+	doneTransform := observability.Time(ctx, "query-transform")
 	hydeDoc := db.applyQueryTransform(ctx, &req)
+	doneTransform()
 
 	resolution := resolveRetrievalPlan(retrievalPlanInput{
 		Query:               req.Query,

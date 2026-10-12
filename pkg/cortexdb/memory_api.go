@@ -1154,6 +1154,7 @@ func (db *DB) recordMemoryRecalls(ctx context.Context, hits []MemorySearchHit) {
 	if len(hits) == 0 {
 		return
 	}
+	defer observability.Time(ctx, "recall-writes")()
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	// Written as a whole column rather than patched in SQL.
