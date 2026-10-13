@@ -43,6 +43,7 @@ func Export(ctx context.Context, db *cortexdb.DB, req ExportRequest) (*ExportRes
 			Summary:        stringValue(node.Properties["summary"], ""),
 			SourceFile:     stringValue(node.Properties["source_file"], ""),
 			SourceLocation: stringValue(node.Properties["source_location"], ""),
+			Metadata:       extractionMetadata(node.Properties),
 		})
 	}
 	for _, edge := range edges {
@@ -54,6 +55,7 @@ func Export(ctx context.Context, db *cortexdb.DB, req ExportRequest) (*ExportRes
 			Directed:       boolValue(edge.Properties["directed"]),
 			SourceFile:     stringValue(edge.Properties["source_file"], ""),
 			SourceLocation: stringValue(edge.Properties["source_location"], ""),
+			Metadata:       extractionMetadata(edge.Properties),
 		})
 	}
 
@@ -87,6 +89,19 @@ func Export(ctx context.Context, db *cortexdb.DB, req ExportRequest) (*ExportRes
 		GraphJSON:      graphJSON,
 		ReportMarkdown: reportMD,
 	}, nil
+}
+
+func extractionMetadata(properties map[string]any) map[string]string {
+	var metadata map[string]string
+	for key, raw := range properties {
+		if value, ok := raw.(string); ok && strings.HasPrefix(key, "meta_") {
+			if metadata == nil {
+				metadata = make(map[string]string)
+			}
+			metadata[strings.TrimPrefix(key, "meta_")] = value
+		}
+	}
+	return metadata
 }
 
 func stringValue(raw any, fallback string) string {
