@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"maps"
 	"strings"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
@@ -111,6 +112,7 @@ func Build(ctx context.Context, db *cortexdb.DB, extractions []ExtractionResult,
 
 func mergeNode(existing, incoming ExtractionNode) ExtractionNode {
 	if existing.ID == "" {
+		incoming.Metadata = maps.Clone(incoming.Metadata)
 		return incoming
 	}
 	if existing.Label == "" {
