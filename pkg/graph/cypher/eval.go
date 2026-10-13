@@ -997,14 +997,14 @@ func (ev *evaluator) evalFunc(f *FuncCall, r row) (any, error) {
 		}
 		rs := []rune(s)
 		start, ok := args[1].(int64)
-		if !ok || start < 0 {
-			return nil, runtimeErr("substring() start must be a non-negative integer")
+		if !ok || start < 0 || start > math.MaxInt32 {
+			return nil, runtimeErr("substring() start must be an integer between 0 and 2147483647")
 		}
 		end := int64(len(rs))
 		if len(args) == 3 {
 			l, ok := args[2].(int64)
-			if !ok || l < 0 {
-				return nil, runtimeErr("substring() length must be a non-negative integer")
+			if !ok || l < 0 || l > math.MaxInt32 {
+				return nil, runtimeErr("substring() length must be an integer between 0 and 2147483647")
 			}
 			end = min(start+l, end)
 		}
@@ -1021,8 +1021,8 @@ func (ev *evaluator) evalFunc(f *FuncCall, r row) (any, error) {
 			return nil, runtimeErr("%s() length must not be null", f.Name)
 		}
 		n, ok := args[1].(int64)
-		if !ok || n < 0 {
-			return nil, runtimeErr("%s() length must be a non-negative integer", f.Name)
+		if !ok || n < 0 || n > math.MaxInt32 {
+			return nil, runtimeErr("%s() length must be an integer between 0 and 2147483647", f.Name)
 		}
 		rs := []rune(s)
 		if n > int64(len(rs)) {
