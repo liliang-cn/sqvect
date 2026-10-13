@@ -86,6 +86,11 @@ func (d *Desensitizer) keptColumns(table string, cols []importflow.Column) []imp
 // the vault and emit a token.
 func (d *Desensitizer) Apply(ctx context.Context, r importflow.Record) (importflow.Record, error) {
 	out := importflow.Record{Table: r.Table, Row: r.Row, Values: map[string]string{}, Nulls: map[string]bool{}}
+	for col, isNull := range r.Nulls {
+		if action, _, _ := d.resolve(r.Table, col); isNull && action != ActionDrop {
+			out.Nulls[col] = true
+		}
+	}
 	for col, val := range r.Values {
 		action, kind, scan := d.resolve(r.Table, col)
 		if action == ActionDrop {
