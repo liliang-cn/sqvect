@@ -194,17 +194,11 @@ func (g *GraphStore) ImportGraphML(ctx context.Context, reader io.Reader) error 
 				node.NodeType = data.Value
 			case "vector":
 				if err := json.Unmarshal([]byte(data.Value), &node.Vector); err != nil {
-					// If vector parsing fails, create a default one
-					node.Vector = make([]float32, 3)
+					return fmt.Errorf("node %q has invalid vector: %w", node.ID, err)
 				}
 			case "properties":
 				_ = json.Unmarshal([]byte(data.Value), &node.Properties)
 			}
-		}
-
-		// Ensure node has a vector
-		if len(node.Vector) == 0 {
-			node.Vector = make([]float32, 3) // Default vector
 		}
 
 		nodes = append(nodes, node)
@@ -472,16 +466,11 @@ func (g *GraphStore) ImportGEXF(ctx context.Context, reader io.Reader) error {
 				node.NodeType = attValue.Value
 			case "vector":
 				if err := json.Unmarshal([]byte(attValue.Value), &node.Vector); err != nil {
-					node.Vector = make([]float32, 3)
+					return fmt.Errorf("node %q has invalid vector: %w", node.ID, err)
 				}
 			case "properties":
 				_ = json.Unmarshal([]byte(attValue.Value), &node.Properties)
 			}
-		}
-
-		// Ensure node has a vector
-		if len(node.Vector) == 0 {
-			node.Vector = make([]float32, 3)
 		}
 
 		nodes = append(nodes, node)
