@@ -247,9 +247,9 @@ func (r *RegexExtractor) extractValue(text, textLower, paramName string, schema 
 	for _, keyword := range keywords {
 		if strings.Contains(textLower, keyword) {
 			// Try to extract value after the keyword
-			pattern := keyword + `\s+[:是]?\s*["']?([^"'\s,。.!?]+)["']?`
+			pattern := `(?i)` + regexp.QuoteMeta(keyword) + `\s+[:是]?\s*["']?([^"'\s,。.!?]+)["']?`
 			re := regexp.MustCompile(pattern)
-			matches := re.FindStringSubmatch(textLower)
+			matches := re.FindStringSubmatch(text)
 			if len(matches) > 1 {
 				return r.coerceType(matches[1], schema.Type)
 			}
