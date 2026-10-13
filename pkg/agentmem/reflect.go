@@ -54,6 +54,7 @@ func (s *Store) Reflect(ctx context.Context, scope Scope, r Reflector) (*Reflect
 
 	var facts []*Memory
 	var existing []*Memory
+	existingIDs := map[string]struct{}{}
 	usedEvidence := map[string]struct{}{}
 	for _, m := range memos {
 		switch m.Type {
@@ -61,6 +62,7 @@ func (s *Store) Reflect(ctx context.Context, scope Scope, r Reflector) (*Reflect
 			facts = append(facts, m)
 		case TypeObservation:
 			existing = append(existing, m)
+			existingIDs[m.ID] = struct{}{}
 			for _, id := range m.EvidenceIDs {
 				usedEvidence[id] = struct{}{}
 			}
@@ -82,6 +84,14 @@ func (s *Store) Reflect(ctx context.Context, scope Scope, r Reflector) (*Reflect
 	observations, err := r.Consolidate(ctx, newFacts, existing)
 	if err != nil {
 		return nil, fmt.Errorf("agentmem: reflector: %w", err)
+	}
+	for _, obs := range observations {
+		if obs.Content == "" || len(obs.EvidenceIDs) < 2 || obs.UpdateObsID == "" {
+			continue
+		}
+		if _, ok := existingIDs[obs.UpdateObsID]; !ok {
+			return nil, fmt.Errorf("agentmem: supersession target %q is not an active observation in this scope", obs.UpdateObsID)
+		}
 	}
 
 	now := time.Now().UTC()
