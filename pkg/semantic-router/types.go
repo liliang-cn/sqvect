@@ -26,7 +26,7 @@ type Route struct {
 
 	// cachedVectors stores pre-computed embeddings for utterances
 	cachedVectors [][]float32
-	cachedOnce    sync.Once
+	cachedMu      sync.Mutex
 	cachedErr     error
 }
 
