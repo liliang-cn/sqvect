@@ -83,9 +83,15 @@ func (g *GraphStore) PageRank(ctx context.Context, iterations int, dampingFactor
 
 	for iter := 0; iter < iterations; iter++ {
 		maxDiff := 0.0
+		danglingMass := 0.0
+		for i, degree := range outDegree {
+			if degree == 0 {
+				danglingMass += scores[i]
+			}
+		}
 
 		for i := 0; i < len(nodes); i++ {
-			rank := (1.0 - dampingFactor) / nodeCount
+			rank := (1.0 - dampingFactor + dampingFactor*danglingMass) / nodeCount
 
 			// Sum contributions from incoming links
 			for _, inIdx := range inLinks[i] {

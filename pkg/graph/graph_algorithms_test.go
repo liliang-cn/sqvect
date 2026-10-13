@@ -75,17 +75,15 @@ func TestPageRank(t *testing.T) {
 			t.Errorf("Authority node should have high PageRank, ranked %d", authorityRank+1)
 		}
 
-		// Sum of all PageRank scores should be close to 1.0
-		// Allow more tolerance due to isolated node
+		// Dangling mass is redistributed, so disconnected and isolated nodes
+		// do not change the normalization of the stationary distribution.
 		totalScore := 0.0
 		for _, result := range results {
 			totalScore += result.Score
 		}
 
-		// For graphs with isolated nodes, total score will be less than 1.0
-		// This is mathematically correct behavior
-		if totalScore <= 0.0 || totalScore > 1.0 {
-			t.Errorf("Total PageRank score should be between 0 and 1, got %f", totalScore)
+		if math.Abs(totalScore-1.0) > 1e-9 {
+			t.Errorf("Total PageRank score should be close to 1, got %f", totalScore)
 		}
 
 		// Verify that authority node has higher score than isolated node
