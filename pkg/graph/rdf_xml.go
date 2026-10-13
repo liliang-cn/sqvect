@@ -203,10 +203,21 @@ func readXMLTree(src, base string) (*xnode, error) {
 				return nil, fmt.Errorf("elements nest more than %d deep", maxRDFXMLDepth)
 			}
 		case xml.EndElement:
+			// RawToken deliberately skips the matching checks Token performs.
+			// Keep those checks here because we need the raw QName prefixes.
+			if len(stack) <= 1 {
+				return nil, fmt.Errorf("unexpected closing element </%s>", t.Name.Local)
+			}
+			if parent.local != t.Name.Local || parent.prefix != t.Name.Space {
+				return nil, fmt.Errorf("closing element </%s:%s> does not match <%s:%s>", t.Name.Space, t.Name.Local, parent.prefix, parent.local)
+			}
 			stack = stack[:len(stack)-1]
 		case xml.CharData:
 			parent.children = append(parent.children, string(t))
 		}
+	}
+	if len(stack) != 1 {
+		return nil, io.ErrUnexpectedEOF
 	}
 	return root, nil
 }
