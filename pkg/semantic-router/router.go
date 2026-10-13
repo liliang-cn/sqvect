@@ -138,7 +138,14 @@ func (r *Router) AddBatch(routes []*Route) error {
 
 	ctx := context.Background()
 
+	names := make(map[string]struct{}, len(r.routes)+len(routes))
+	for _, existing := range r.routes {
+		names[existing.Name] = struct{}{}
+	}
 	for _, route := range routes {
+		if route == nil {
+			return fmt.Errorf("route cannot be nil")
+		}
 		if route.Name == "" {
 			return fmt.Errorf("route name cannot be empty")
 		}
@@ -147,11 +154,10 @@ func (r *Router) AddBatch(routes []*Route) error {
 		}
 
 		// Check for duplicates
-		for _, existing := range r.routes {
-			if existing.Name == route.Name {
-				return fmt.Errorf("route %q already exists", route.Name)
-			}
+		if _, exists := names[route.Name]; exists {
+			return fmt.Errorf("route %q already exists", route.Name)
 		}
+		names[route.Name] = struct{}{}
 	}
 
 	r.routes = append(r.routes, routes...)
