@@ -61,7 +61,7 @@ func (db *DB) InsertText(ctx context.Context, id string, text string, metadata m
 
 	vec, err := db.embedder.Embed(ctx, text)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		return fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
 	embedding := &core.Embedding{
@@ -94,7 +94,7 @@ func (db *DB) InsertTextBatch(ctx context.Context, texts map[string]string, meta
 
 	vectors, err := db.embedder.EmbedBatch(ctx, textList)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		return fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
 	embeddings := make([]*core.Embedding, len(ids))
@@ -183,7 +183,7 @@ func (db *DB) SearchTextInCollection(ctx context.Context, collection string, que
 
 	vec, err := db.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
 	opts := core.SearchOptions{
@@ -208,7 +208,7 @@ func (db *DB) HybridSearchText(ctx context.Context, query string, topK int) ([]c
 
 	vec, err := db.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
 	return db.store.HybridSearch(ctx, vec, query, core.HybridSearchOptions{
