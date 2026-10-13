@@ -23,10 +23,14 @@ func MaskValue(kind PiiKind, v string) string {
 		return keepEnds(v, 6, 4)
 	case PiiEmail:
 		at := strings.IndexByte(v, '@')
-		if at <= 1 {
-			return "***" + v[max(at, 0):]
+		if at < 0 {
+			return strings.Repeat("*", runeLen(v))
 		}
-		return v[:1] + "***" + v[at:]
+		local := []rune(v[:at])
+		if len(local) <= 1 {
+			return "***" + v[at:]
+		}
+		return string(local[:1]) + "***" + v[at:]
 	case PiiName:
 		r := []rune(v)
 		if len(r) <= 1 {
