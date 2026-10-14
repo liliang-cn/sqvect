@@ -14,7 +14,7 @@ AI memory and a knowledge graph in one SQLite file. Pure Go, no service to run, 
 | Claude Code | `/plugin marketplace add liliang-cn/cortexdb`, then `/plugin install cortexdb@cortexdb` |
 | Codex | `codex plugin marketplace add liliang-cn/cortexdb && codex plugin add cortexdb@cortexdb` |
 | Claude Code mod (optional) | `/plugin install cortexdb-live@cortexdb` |
-| DeepSeek Harness | `dsh plugin --profile web add cortexdb-dsh-memory` ([guide](plugins/dsh-cortexdb-memory/README.md)) |
+| DeepSeek Harness | `dsh plugin --profile web add "github:liliang-cn/cortexdb#semver:^2&path:/plugins/dsh-cortexdb-memory"` ([guide](plugins/dsh-cortexdb-memory/README.md)) |
 | Shared-brain server | `go install github.com/liliang-cn/cortexdb/v2/cmd/cortexdb-grpc@latest` |
 | Clients | `cargo add cortexdb-client` · `pip install cortexdb-client` · `npm install cortexdb-client` |
 

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Changed
+
+- The DeepSeek Harness plugin installs from this repository's release tags
+  (`dsh plugin --profile web add "github:liliang-cn/cortexdb#semver:^2&path:/plugins/dsh-cortexdb-memory"`)
+  instead of npm, and CI no longer publishes it there. A release needs no npm
+  token, and the plugin is never behind the binaries it downloads.
+
 ## [2.126.0] - 2026-10-14
 
 ### Added

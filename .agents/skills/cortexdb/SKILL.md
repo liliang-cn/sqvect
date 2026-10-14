@@ -345,7 +345,8 @@ Native host-memory adapters live under `plugins/`:
   capability and CortexDB recall/store/delete tools.
 - `plugins/hermes-cortexdb-memory` registers Hermes Agent's `MemoryProvider`
   with automatic prefetch and completed-turn synchronization.
-- `plugins/dsh-cortexdb-memory` (npm `cortexdb-dsh-memory`) is a DeepSeek
+- `plugins/dsh-cortexdb-memory` (package `cortexdb-dsh-memory`, installed
+  from this repository's release tags) is a DeepSeek
   Harness cordis bundle: recall on `agent/pre-step` for each typed prompt,
   session capture through `cortexdb-mcp --capture-session` (memories under
   `auto:dsh-<session>:`), and `cortexdb_memory_search` / `_store` / `_forget`
