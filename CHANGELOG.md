@@ -2,6 +2,52 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.125.1] - 2026-10-14
+
+Thirty of these fixes came as pull requests from @rudycelekli (#9–#38), each
+with a regression test; three follow-ups adjust how two of them fail.
+
+### Fixed
+
+- Graph: PageRank dropped the score of nodes with no outgoing edges, so scores
+  no longer summed to 1; it is redistributed now. GraphML and GEXF imports gave
+  vectorless nodes a fake 3-d zero vector and replaced an unreadable vector
+  with zeros; vectorless nodes stay vectorless and a malformed vector fails the
+  import. RDF/XML accepted mismatched and unclosed elements. SPARQL `DISTINCT`
+  and `GROUP BY` keys were joined with separators that values can contain, so
+  different solutions could collide. SHACL did not check `xsd:negativeInteger`
+  or `xsd:nonPositiveInteger`.
+- Cypher: `range()` with a step near the integer limits wrapped around instead
+  of stopping, and `substring()`, `left()` and `right()` accepted positions
+  past what a string slice can hold.
+- Semantic router: a route whose best score was zero or negative (negative
+  Euclidean distance, negative dot product) could never be chosen; functions
+  were registered under the function name while routing returns the route
+  name; per-function extractors and a schema's `required` list were ignored;
+  keyword patterns were not escaped and extracted values were lowercased; a
+  failed utterance embedding was cached for good; the cached embedder and the
+  sparse encoders' refit were not safe under concurrent use; one batch could
+  add two routes of the same name, and a nil route panicked.
+- agentmem: `AppendContext` read, concatenated and wrote back, so concurrent
+  appends lost sections (20 concurrent appends kept 15 on SQLite and 5 on
+  PostgreSQL); it is one upsert now. A reflection could mark an observation of
+  another scope stale; such a target is now ignored and reported in
+  `IgnoredTargets`, and the observation is still saved.
+- Importers and connectors: duplicate CSV header names silently shadowed a
+  column (now an error; an empty header becomes `column_<n>`); a negative
+  sample size was used as given instead of the default; email masking cut multi-byte local parts and
+  printed a value with no `@` unmasked; columns that were NULL in every row
+  were dropped.
+- `quick` and text APIs wrapped embedding errors with `%v`, so `errors.Is`
+  could not see the cause; an empty vector batch with non-empty contents
+  returned success. CSV export did not report a failed final flush. Key files
+  with trailing data after the JSON document were accepted. Exported memory
+  frontmatter mis-escaped backslashes, and now keeps `<`, `>` and `&` readable.
+- graphflow lost extraction metadata in JSON exports and aliased the caller's
+  metadata map while merging nodes.
+- The DeepSeek Harness plugin accepted a truncated gRPC frame or protobuf field
+  as a successful, shorter answer.
+
 ## [2.125.0] - 2026-10-12
 
 ### Added
