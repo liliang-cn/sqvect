@@ -99,8 +99,10 @@ func TestReembedMemoryVectorsFillsTheBacklog(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	// Era two: embedder configured. The backlog must become embeddable.
-	db, err := Open(DefaultConfig(path), WithEmbedder(stubEmbedder{dim: 8}))
+	// Era two: embedder configured. The backlog must become embeddable. The
+	// background healer would fill it on its own, between the dry run and the
+	// real one, and leave this pass nothing to do; this tests the explicit call.
+	db, err := Open(DefaultConfig(path), WithEmbedder(stubEmbedder{dim: 8}), WithVectorHealing(VectorHealOptions{Disabled: true}))
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
