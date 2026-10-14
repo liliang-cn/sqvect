@@ -501,3 +501,61 @@ func BenchmarkBoundingBoxSearch(b *testing.B) {
 		_, _ = index.SearchBoundingBox(bbox)
 	}
 }
+
+func TestInsertExistingIDMovesPoint(t *testing.T) {
+	idx := NewGeoIndex()
+	if err := idx.Insert(GeoPoint{ID: "a", Coordinate: Coordinate{Lat: 10, Lng: 10}}); err != nil {
+		t.Fatal(err)
+	}
+	// Re-inserting an ID must replace the earlier point, wherever it was.
+	if err := idx.Insert(GeoPoint{ID: "a", Coordinate: Coordinate{Lat: 40, Lng: 40}}); err != nil {
+		t.Fatal(err)
+	}
+
+	old, err := idx.SearchRadius(Coordinate{Lat: 10, Lng: 10}, 10, Kilometers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(old) != 0 {
+		t.Fatalf("radius search at the old location returned %d stale result(s): %+v", len(old), old)
+	}
+
+	moved, err := idx.SearchRadius(Coordinate{Lat: 40, Lng: 40}, 10, Kilometers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(moved) != 1 {
+		t.Fatalf("radius search at the new location returned %d result(s), want 1", len(moved))
+	}
+
+	box, err := idx.SearchBoundingBox(BoundingBox{MinLat: 9, MaxLat: 11, MinLng: 9, MaxLng: 11})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(box) != 0 {
+		t.Fatalf("bounding box at the old location returned %d stale result(s)", len(box))
+	}
+
+	// Re-inserting in the same cell must not duplicate the point.
+	if err := idx.Insert(GeoPoint{ID: "b", Coordinate: Coordinate{Lat: 20, Lng: 20}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := idx.Insert(GeoPoint{ID: "b", Coordinate: Coordinate{Lat: 20, Lng: 20}}); err != nil {
+		t.Fatal(err)
+	}
+	same, err := idx.SearchRadius(Coordinate{Lat: 20, Lng: 20}, 10, Kilometers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(same) != 1 {
+		t.Fatalf("re-inserted point appears %d times, want 1", len(same))
+	}
+
+	// Deleting after a move must remove every trace of the point.
+	if !idx.Delete("a") {
+		t.Fatal("Delete(a) = false")
+	}
+	if res, _ := idx.SearchRadius(Coordinate{Lat: 10, Lng: 10}, 10, Kilometers); len(res) != 0 {
+		t.Fatalf("deleted point still found at its first location: %+v", res)
+	}
+}
