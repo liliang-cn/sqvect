@@ -13,7 +13,7 @@ func (r scopedUpdateReflector) Consolidate(_ context.Context, facts, _ []*agentm
 	return []agentmem.Observation{{Content: "new observation", EvidenceIDs: []string{facts[0].ID, facts[1].ID}, UpdateObsID: r.target}}, nil
 }
 
-func TestReflectRejectsTargetsOutsideItsExistingObservations(t *testing.T) {
+func TestReflectIgnoresTargetsOutsideItsExistingObservations(t *testing.T) {
 	for _, target := range []string{"other-bank", "same-bank-fact", "missing"} {
 		t.Run(target, func(t *testing.T) {
 			store, cleanup := newStore(t)
@@ -29,8 +29,12 @@ func TestReflectRejectsTargetsOutsideItsExistingObservations(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := store.Reflect(ctx, scope, scopedUpdateReflector{target: target}); err == nil {
-				t.Error("invalid supersession target accepted")
+			result, err := store.Reflect(ctx, scope, scopedUpdateReflector{target: target})
+			if err != nil {
+				t.Fatalf("one bad target failed the whole reflection: %v", err)
+			}
+			if result.Created != 1 || result.Updated != 0 || len(result.IgnoredTargets) != 1 || result.IgnoredTargets[0] != target {
+				t.Fatalf("result = %+v", result)
 			}
 			for _, id := range []string{"other-bank", "same-bank-fact"} {
 				m, err := store.Get(ctx, id)
@@ -39,8 +43,9 @@ func TestReflectRejectsTargetsOutsideItsExistingObservations(t *testing.T) {
 				}
 			}
 			observations, err := store.GetByType(ctx, agentmem.TypeObservation, 10)
-			if err != nil || len(observations) != 1 {
-				t.Fatalf("invalid output persisted an observation: count=%d, error=%v", len(observations), err)
+			// Bob's observation and the new one, which is kept as a new observation.
+			if err != nil || len(observations) != 2 {
+				t.Fatalf("observations: count=%d, error=%v", len(observations), err)
 			}
 		})
 	}

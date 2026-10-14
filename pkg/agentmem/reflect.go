@@ -35,6 +35,10 @@ type ReflectResult struct {
 	Reviewed int      `json:"reviewed"`
 	NewIDs   []string `json:"new_ids,omitempty"`
 	Note     string   `json:"note,omitempty"`
+	// IgnoredTargets are supersession targets the Reflector named that are
+	// not active observations in this scope. Their observations are saved as
+	// new ones and nothing outside the scope is marked stale.
+	IgnoredTargets []string `json:"ignored_targets,omitempty"`
 }
 
 // Reflect collects active facts in scope, asks the Reflector to consolidate
@@ -85,19 +89,16 @@ func (s *Store) Reflect(ctx context.Context, scope Scope, r Reflector) (*Reflect
 	if err != nil {
 		return nil, fmt.Errorf("agentmem: reflector: %w", err)
 	}
-	for _, obs := range observations {
-		if obs.Content == "" || len(obs.EvidenceIDs) < 2 || obs.UpdateObsID == "" {
-			continue
-		}
-		if _, ok := existingIDs[obs.UpdateObsID]; !ok {
-			return nil, fmt.Errorf("agentmem: supersession target %q is not an active observation in this scope", obs.UpdateObsID)
-		}
-	}
-
 	now := time.Now().UTC()
 	for _, obs := range observations {
 		if obs.Content == "" || len(obs.EvidenceIDs) < 2 {
 			continue
+		}
+		// A model can name any id. Only an active observation of this scope
+		// may be superseded; any other target is dropped, not the observation.
+		if _, ok := existingIDs[obs.UpdateObsID]; obs.UpdateObsID != "" && !ok {
+			res.IgnoredTargets = append(res.IgnoredTargets, obs.UpdateObsID)
+			obs.UpdateObsID = ""
 		}
 		newID := uuid.NewString()
 		mem := &Memory{
