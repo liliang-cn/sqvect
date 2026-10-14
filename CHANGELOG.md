@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.127.2] - 2026-10-14
+
+### Fixed
+
+- The context pack that recall returns clipped each memory and knowledge
+  section at a byte count, which split a CJK character and left U+FFFD
+  (`/dev/lab/data �...`). The cut keeps the same byte budget and steps back
+  to the start of the character it would have split.
+
 ## [2.127.1] - 2026-10-14
 
 ### Fixed
