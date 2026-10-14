@@ -48,8 +48,17 @@ func NewCSVSource(r io.Reader, opts CSVOptions) (*CSVSource, error) {
 	}
 	header := raw[0]
 	cols := make([]Column, len(header))
+	seen := make(map[string]bool, len(header))
 	for i, h := range header {
-		cols[i] = Column{Name: strings.TrimSpace(h)}
+		name := strings.TrimSpace(h)
+		if name == "" {
+			return nil, fmt.Errorf("csv header column %d is empty", i+1)
+		}
+		if seen[name] {
+			return nil, fmt.Errorf("duplicate csv header column %q", name)
+		}
+		seen[name] = true
+		cols[i] = Column{Name: name}
 	}
 	var recs []Record
 	for ri, row := range raw[1:] {
