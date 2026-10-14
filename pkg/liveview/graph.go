@@ -18,8 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liliang-cn/cortexdb/v2/pkg/rpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	cortexdb "github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
@@ -41,7 +41,11 @@ func RemoteConfigured() (addr, token string, ok bool) {
 // dial opens a connection to a shared brain, attaching the bearer token when
 // one is set.
 func dial(addr, token string) (*grpc.ClientConn, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	target, creds, err := rpc.Endpoint(addr)
+	if err != nil {
+		return nil, err
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
 	if token != "" {
 		opts = append(opts, grpc.WithUnaryInterceptor(
 			func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn,
@@ -50,7 +54,7 @@ func dial(addr, token string) (*grpc.ClientConn, error) {
 				return invoker(ctx, method, req, reply, cc, callOpts...)
 			}))
 	}
-	conn, err := grpc.NewClient(addr, opts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to cortexdb at %s: %w", addr, err)
 	}

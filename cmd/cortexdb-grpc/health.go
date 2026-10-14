@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
+	"github.com/liliang-cn/cortexdb/v2/pkg/rpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
@@ -24,11 +24,15 @@ const healthProbeTimeout = 5 * time.Second
 // systemd health command then need nothing installed beside the server itself.
 // The image stays a static binary with no shell and no probe helper in it.
 func probeHealth(ctx context.Context, addr, token string) (string, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	target, creds, err := rpc.Endpoint(probeAddr(addr))
+	if err != nil {
+		return "", err
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
 	if token != "" {
 		opts = append(opts, grpc.WithUnaryInterceptor(bearerInterceptor(token)))
 	}
-	conn, err := grpc.NewClient(probeAddr(addr), opts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return "", fmt.Errorf("connect to cortexdb-grpc at %s: %w", addr, err)
 	}

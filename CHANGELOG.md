@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- A shared brain can be reached over TLS: `CORTEXDB_REMOTE=https://host[:port]`
+  (port 443 by default) dials with TLS checked against the system roots, for a
+  `cortexdb-grpc` published behind a TLS-terminating proxy such as Caddy with
+  an `h2c://` upstream. `host:port` and `http://host:port` stay plaintext.
+  `cortexdb-mcp`, `cortexdb-grpc -health` and the live view all go through the
+  same `pkg/rpc.Endpoint`.
+
 ## [2.127.2] - 2026-10-14
 
 ### Fixed

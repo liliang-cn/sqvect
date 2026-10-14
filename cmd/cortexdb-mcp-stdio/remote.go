@@ -8,10 +8,10 @@ import (
 	"time"
 
 	cortexdbroot "github.com/liliang-cn/cortexdb/v2"
+	"github.com/liliang-cn/cortexdb/v2/pkg/rpc"
 	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -113,16 +113,19 @@ func addRemoteTool(server *mcp.Server, client rpcv1.ToolsServiceClient, def *rpc
 // dialCortexDB opens a gRPC connection, attaching the bearer token to every
 // call when one is configured.
 //
-// The connection is plaintext: it is meant to run over loopback or a private
-// encrypted network (Tailscale), which is also the only place a shared brain
-// should be reachable. The token is what stops other hosts on that network
-// from reading the brain.
+// host:port is plaintext, for loopback, the LAN or a tailnet, where the token
+// is the access control; https://host is TLS, for a brain published behind a
+// TLS-terminating proxy (rpc.Endpoint).
 func dialCortexDB(addr, token string) (*grpc.ClientConn, error) {
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
+	target, creds, err := rpc.Endpoint(addr)
+	if err != nil {
+		return nil, err
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
 	if token != "" {
 		opts = append(opts, grpc.WithUnaryInterceptor(bearerInterceptor(token)))
 	}
-	conn, err := grpc.NewClient(addr, opts...)
+	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to cortexdb at %s: %w", addr, err)
 	}

@@ -81,7 +81,7 @@ haiku 用的是 Claude Code 自己的模型额度，不需要 API key。语言�
 | 变量 | 含义 |
 | --- | --- |
 | `CORTEXDB_PATH` | 数据库文件（默认 `~/.cortexdb/cortexdb.db`） |
-| `CORTEXDB_REMOTE` | 连到 `host:port` 上的共享 `cortexdb-grpc`，不用本地文件 |
+| `CORTEXDB_REMOTE` | 连到共享的 `cortexdb-grpc`，不用本地文件：`host:port` 是明文，`https://host` 走 TLS（放在反向代理后面时用） |
 | `CORTEXDB_GRPC_TOKEN` | 该服务的 Bearer token |
 | `CORTEXDB_GRPC_ADDR` | 服务端监听地址（默认 `127.0.0.1:47821`） |
 | `CORTEXDB_EMBED_BASE_URL` | OpenAI 兼容的 embeddings 端点；不设就是词法模式 |

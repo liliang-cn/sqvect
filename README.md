@@ -82,7 +82,7 @@ Haiku runs on Claude Code's own model access, so no API key is needed. Language:
 | Variable | Meaning |
 | --- | --- |
 | `CORTEXDB_PATH` | Database file (default `~/.cortexdb/cortexdb.db`) |
-| `CORTEXDB_REMOTE` | Use a shared `cortexdb-grpc` at `host:port` instead of a local file |
+| `CORTEXDB_REMOTE` | Use a shared `cortexdb-grpc` at `host:port` (plaintext) or `https://host` (TLS, behind a proxy) instead of a local file |
 | `CORTEXDB_GRPC_TOKEN` | Bearer token for that server |
 | `CORTEXDB_GRPC_ADDR` | Server listen address (default `127.0.0.1:47821`) |
 | `CORTEXDB_EMBED_BASE_URL` | OpenAI-compatible embeddings endpoint; unset = lexical mode |
