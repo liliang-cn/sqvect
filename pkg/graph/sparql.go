@@ -662,25 +662,17 @@ func buildSPARQLGroups(parsed *sparqlQuery, bindings []map[string]RDFTerm) ([][]
 	for _, binding := range bindings {
 		var key strings.Builder
 		for _, groupKey := range parsed.GroupBy {
+			writeSPARQLKeyField(&key, groupKey.Alias)
 			value, ok, err := groupKey.Expr.Eval(binding)
 			if err != nil && !isSPARQLExprError(err) {
 				return nil, err
 			}
 			if err != nil || !ok {
-				key.WriteString(groupKey.Alias)
-				key.WriteString("=;")
+				key.WriteByte('0')
 				continue
 			}
-			key.WriteString(groupKey.Alias)
-			key.WriteByte('=')
-			key.WriteString(value.Kind)
-			key.WriteByte('|')
-			key.WriteString(value.Value)
-			key.WriteByte('|')
-			key.WriteString(value.Language)
-			key.WriteByte('|')
-			key.WriteString(value.Datatype)
-			key.WriteByte(';')
+			key.WriteByte('1')
+			writeSPARQLTermKey(&key, value)
 		}
 		groupID := key.String()
 		if _, exists := groups[groupID]; !exists {
@@ -1252,18 +1244,13 @@ func distinctBindings(bindings []map[string]RDFTerm, vars []string) []map[string
 	for _, binding := range bindings {
 		var key strings.Builder
 		for _, variable := range vars {
-			key.WriteString(variable)
-			key.WriteByte('=')
+			writeSPARQLKeyField(&key, variable)
 			if value, ok := binding[variable]; ok {
-				key.WriteString(value.Kind)
-				key.WriteByte('|')
-				key.WriteString(value.Value)
-				key.WriteByte('|')
-				key.WriteString(value.Language)
-				key.WriteByte('|')
-				key.WriteString(value.Datatype)
+				key.WriteByte('1')
+				writeSPARQLTermKey(&key, value)
+			} else {
+				key.WriteByte('0')
 			}
-			key.WriteByte(';')
 		}
 		if _, ok := seen[key.String()]; ok {
 			continue
@@ -1272,6 +1259,20 @@ func distinctBindings(bindings []map[string]RDFTerm, vars []string) []map[string
 		out = append(out, binding)
 	}
 	return out
+}
+
+// Length-prefix every field: literal values and datatype IRIs can themselves
+// contain the separators a delimiter-based solution key would use.
+func writeSPARQLKeyField(key *strings.Builder, value string) {
+	key.WriteString(strconv.Itoa(len(value)))
+	key.WriteByte(':')
+	key.WriteString(value)
+}
+
+func writeSPARQLTermKey(key *strings.Builder, value RDFTerm) {
+	for _, field := range []string{value.Kind, value.Value, value.Language, value.Datatype} {
+		writeSPARQLKeyField(key, field)
+	}
 }
 
 func materializeConstructTriples(templates []sparqlPattern, bindings []map[string]RDFTerm) []RDFTriple {
