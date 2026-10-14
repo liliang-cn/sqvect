@@ -9,7 +9,9 @@ import (
 	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 	"log"
 	"math"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -209,11 +211,26 @@ func (db *DB) GetMemory(ctx context.Context, req MemoryGetRequest) (*MemoryGetRe
 }
 
 // SearchMemory searches a resolved memory bucket, using semantic session search when an embedder is available.
-// queryEmbedTimeout bounds embedding a recall's query; see searchMemory.
-var queryEmbedTimeout = 3 * time.Second
+// queryEmbedTimeout bounds embedding a search's query (searchMemory,
+// SearchGraphRAG). Past it the search answers by keyword, which runs beside
+// the embedding, so a busy model costs a recall this long and no longer.
+// Agents give a recall a budget of a second or two; the default leaves the
+// rest of it to the search. CORTEXDB_QUERY_EMBED_TIMEOUT_MS overrides it.
+var queryEmbedTimeout = envDurationMS("CORTEXDB_QUERY_EMBED_TIMEOUT_MS", 800*time.Millisecond)
+
+// embedCallTimeout bounds one call to the embedder made on behalf of the
+// cache (embedder_cache.go), which outlives the request that started it.
+const embedCallTimeout = 30 * time.Second
+
+func envDurationMS(name string, def time.Duration) time.Duration {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name))); err == nil && v > 0 {
+		return time.Duration(v) * time.Millisecond
+	}
+	return def
+}
 
 func (db *DB) SearchMemory(ctx context.Context, req MemorySearchRequest) (*MemorySearchResponse, error) {
-	return db.searchMemory(ctx, req, true)
+	return db.searchMemoryShared(ctx, req)
 }
 
 // searchMemory is SearchMemory with the recall counters optional: the PPR
@@ -292,6 +309,22 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 	// it to five vaguely-similar neighbours, and a query about nothing the
 	// store knows still got five of them: a vector search without a floor has
 	// a nearest neighbour to every question ever asked.
+	// The keyword search runs beside the semantic one rather than after it:
+	// a recall used to wait for the embedder and then for FTS, and when the
+	// embedder was slow it gave up on both. Now the slower of the two sets the
+	// time, and a semantic path that times out finds the keyword answer ready.
+	type lexicalResult struct {
+		hits []MemorySearchHit
+		err  error
+	}
+	lexical := make(chan lexicalResult, 1)
+	go func() {
+		doneLexical := observability.Time(ctx, "lexical")
+		hits, err := db.searchMemoryLexical(ctx, bucketID, resolution.Plan.Query, resolution.Plan.Keywords, resolution.Plan.AlternateQueries, req.TopK)
+		doneLexical()
+		lexical <- lexicalResult{hits, err}
+	}()
+
 	var semanticHits []MemorySearchHit
 	if db.HasEmbedder() && resolution.Decision.EffectiveMode == RetrievalModeAuto {
 		// Bounded: a recall waits on this, and the embedder can be a model on
@@ -370,9 +403,8 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 		}
 	}
 
-	doneLexical := observability.Time(ctx, "lexical")
-	hits, err := db.searchMemoryLexical(ctx, bucketID, resolution.Plan.Query, resolution.Plan.Keywords, resolution.Plan.AlternateQueries, req.TopK)
-	doneLexical()
+	lexicalAnswer := <-lexical
+	hits, err := lexicalAnswer.hits, lexicalAnswer.err
 	if err != nil {
 		if len(semanticHits) == 0 {
 			return nil, err
@@ -1169,7 +1201,15 @@ func entityAliasKey(name string) string {
 // ranking — recall begets recall, and a popularity boost would compound its own
 // bias. The numbers exist for the usage report, where a person decides.
 func (db *DB) recordMemoryRecalls(ctx context.Context, hits []MemorySearchHit) {
-	if len(hits) == 0 {
+	db.recordMemoryRecallsTimes(ctx, hits, 1)
+}
+
+// recordMemoryRecallsTimes counts each hit as recalled times times: the
+// requests a shared search answered at once (memory_search_coalesce.go) are
+// each a recall, and writing "seen count + 1" once per request would count
+// them all as one.
+func (db *DB) recordMemoryRecallsTimes(ctx context.Context, hits []MemorySearchHit, times int) {
+	if len(hits) == 0 || times <= 0 {
 		return
 	}
 	defer observability.Time(ctx, "recall-writes")()
@@ -1194,7 +1234,7 @@ func (db *DB) recordMemoryRecalls(ctx context.Context, hits []MemorySearchHit) {
 		for k, v := range hit.Memory.Metadata {
 			metadata[k] = v
 		}
-		metadata["recall_count"] = memoryRecallCount(hit.Memory.Metadata) + 1
+		metadata["recall_count"] = memoryRecallCount(hit.Memory.Metadata) + times
 		metadata["last_recalled_at"] = now
 
 		encoded, err := json.Marshal(metadata)

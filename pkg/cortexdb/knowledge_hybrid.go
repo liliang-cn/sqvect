@@ -15,8 +15,18 @@ const hybridRRFK = 60.0
 // losing the matches the other would have found. If one path errors, the other
 // is used alone; only if both fail does it return an error.
 func (db *DB) searchKnowledgeHybrid(ctx context.Context, query string, opts GraphRAGQueryOptions, lexReq ToolSearchGraphRAGLexicalRequest) (*GraphRAGQueryResult, error) {
-	vres, verr := db.SearchGraphRAG(ctx, query, opts)
-	lres, lerr := db.GraphRAGTools().SearchGraphRAGLexical(ctx, lexReq)
+	// Side by side, not one after the other: the vector path waits on the
+	// embedder, which may be a model on another machine, and the lexical path
+	// needs nothing from it.
+	var lres *GraphRAGQueryResult
+	var lerr error
+	lexicalDone := make(chan struct{})
+	go func() {
+		defer close(lexicalDone)
+		lres, lerr = db.GraphRAGTools().SearchGraphRAGLexical(ctx, lexReq)
+	}()
+	vres, verr := db.SearchGraphRAG(withKeywordFallback(ctx), query, opts)
+	<-lexicalDone
 	if verr != nil && lerr != nil {
 		return nil, verr
 	}
@@ -100,4 +110,17 @@ func fuseHybridChunks(vector, lexical []GraphRAGChunkResult, topK int) []GraphRA
 		out = append(out, c)
 	}
 	return out
+}
+
+type keywordFallbackKey struct{}
+
+// withKeywordFallback marks a search whose caller runs a keyword search
+// beside it, so its query embedding may give up early (see SearchGraphRAG).
+func withKeywordFallback(ctx context.Context) context.Context {
+	return context.WithValue(ctx, keywordFallbackKey{}, true)
+}
+
+func keywordFallback(ctx context.Context) bool {
+	v, _ := ctx.Value(keywordFallbackKey{}).(bool)
+	return v
 }

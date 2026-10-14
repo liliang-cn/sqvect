@@ -61,6 +61,9 @@ type DB struct {
 	// memoryFloor is the cosine below which a semantic memory hit is dropped;
 	// see WithMemorySemanticFloor.
 	memoryFloor float64
+	// memorySearches shares one run among identical concurrent memory
+	// searches; see memory_search_coalesce.go.
+	memorySearches memorySearchFlights
 }
 
 // Config represents database configuration
@@ -257,7 +260,7 @@ func Open(config Config, opts ...Option) (*DB, error) {
 		opt(db)
 	}
 	if db.embedder != nil {
-		db.embedder = timedEmbedder{watchedEmbedder{Embedder: db.embedder, heal: &db.heal}}
+		db.embedder = timedEmbedder{watchedEmbedder{Embedder: newCachedEmbedder(db.embedder), heal: &db.heal}}
 	}
 
 	if err := db.startChangeRuntime(ctx); err != nil {

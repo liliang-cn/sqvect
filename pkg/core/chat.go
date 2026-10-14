@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/liliang-cn/cortexdb/v2/internal/encoding"
@@ -173,60 +175,69 @@ func (s *SQLiteStore) SearchChatHistoryScored(ctx context.Context, queryVec []fl
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// This is a linear scan over the session's messages.
-	// For huge history, we should use HNSW, but session history is usually small (<1000 items).
-
-	query := `
-		SELECT id, session_id, role, content, vector, metadata, created_at
-		FROM messages 
-		WHERE session_id = ? AND vector IS NOT NULL
-	`
-
-	rows, err := s.db.QueryContext(ctx, query, sessionID)
+	// A linear scan over the session's vectors, which come from the cache
+	// (chat_vector_cache.go) when nothing has changed them; only the rows that
+	// make the cut are read in full. Reading content, metadata and timestamp of
+	// every row — and parsing each one's metadata JSON — to keep a handful used
+	// to cost most of a recall on a two-core node.
+	ids, vectors, err := s.sessionMessageVectors(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	type scoredMsg struct {
-		msg   *Message
-		score float32
+	type candidate struct {
+		id     string
+		vector []float32
+		score  float64
 	}
-	var scored []scoredMsg
+	candidates := make([]candidate, len(ids))
+	for i, id := range ids {
+		candidates[i] = candidate{id: id, vector: vectors[i], score: float64(float32(s.similarityFn(queryVec, vectors[i])))}
+	}
 
-	for rows.Next() {
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	if len(candidates) > limit {
+		candidates = candidates[:max(limit, 0)]
+	}
+	if len(candidates) == 0 {
+		return []ScoredMessage{}, nil
+	}
+
+	placeholders := make([]string, len(candidates))
+	args := make([]any, len(candidates))
+	for i, c := range candidates {
+		placeholders[i] = "?"
+		args[i] = c.id
+	}
+	full, err := s.db.QueryContext(ctx, `SELECT id, session_id, role, content, metadata, created_at FROM messages WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer full.Close()
+	byID := make(map[string]*Message, len(candidates))
+	for full.Next() {
 		var msg Message
-		var vectorBytes, metadataJSON []byte
-
-		rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &vectorBytes, &metadataJSON, &msg.CreatedAt)
-
-		if len(vectorBytes) > 0 {
-			msg.Vector, _ = encoding.DecodeVector(vectorBytes)
-			score := s.similarityFn(queryVec, msg.Vector)
-
-			if len(metadataJSON) > 0 {
-				_ = json.Unmarshal(metadataJSON, &msg.Metadata)
-			}
-
-			scored = append(scored, scoredMsg{msg: &msg, score: float32(score)})
+		var metadataJSON []byte
+		if err := full.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &metadataJSON, &msg.CreatedAt); err != nil {
+			return nil, err
 		}
-	}
-
-	// Sort by score
-	// Note: Implement simple sort
-	for i := 0; i < len(scored); i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].score > scored[i].score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
+		if len(metadataJSON) > 0 {
+			_ = json.Unmarshal(metadataJSON, &msg.Metadata)
 		}
+		byID[msg.ID] = &msg
+	}
+	if err := full.Err(); err != nil {
+		return nil, err
 	}
 
-	result := make([]ScoredMessage, 0, limit)
-	for i := 0; i < len(scored) && i < limit; i++ {
-		result = append(result, ScoredMessage{Message: scored[i].msg, Score: float64(scored[i].score)})
+	result := make([]ScoredMessage, 0, len(candidates))
+	for _, c := range candidates {
+		msg, ok := byID[c.id]
+		if !ok {
+			continue // deleted between the passes
+		}
+		msg.Vector = append([]float32(nil), c.vector...) // the cache's copy stays the cache's
+		result = append(result, ScoredMessage{Message: msg, Score: c.score})
 	}
-
 	return result, nil
 }
 

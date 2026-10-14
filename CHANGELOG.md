@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- A memory recall is several times faster, and stays fast under a burst.
+  Measured on a two-core node against a copy of a 4,300-memory shared brain
+  with its embedding model on another machine: one recall went from 1.0 s
+  (p50) / 1.6 s (p95) to 0.30 s / 0.45 s, and sixteen at once from 6.2 s /
+  7.8 s to 0.82 s / 0.84 s.
+  - The vector scan keeps each session's decoded vectors in memory, checked
+    against a version SQLite triggers bump on every insert, delete or update
+    of a vector or its session — by any writer — and reads only the rows
+    that make the cut in full. Vectors are encoded and decoded directly
+    instead of one value at a time through `binary.Read`.
+  - The full-text update triggers on `messages` fire on a change of
+    `content` only. They fired on any column, so every recall counter
+    written to a memory's metadata rewrote its text in both full-text
+    indexes.
+  - Query embeddings are cached (2,048 texts), and concurrent requests for
+    the same text share one call to the model.
+  - The keyword search runs beside the embedding and the vector search
+    instead of after them, in memory recall and in hybrid knowledge search.
+    A query embedding gives up after 800 ms (`CORTEXDB_QUERY_EMBED_TIMEOUT_MS`)
+    and the search answers by keyword; hybrid knowledge search no longer
+    waits on the model without a bound.
+  - Identical memory searches that arrive together share one run, and each
+    is still counted as a recall.
+
 ## [2.128.0] - 2026-10-14
 
 ### Added

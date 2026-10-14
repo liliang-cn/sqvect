@@ -75,6 +75,9 @@ func (s *SQLiteStore) Init(ctx context.Context) error {
 	if err := s.createTables(ctx); err != nil {
 		return wrapError("init", err)
 	}
+	if err := s.initMessageVectorCache(ctx); err != nil {
+		return wrapError("init", err)
+	}
 
 	// Initialize HNSW index if enabled
 	if err := s.initHNSWIndex(ctx); err != nil {

@@ -1,7 +1,6 @@
 package encoding
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -12,71 +11,47 @@ import (
 // ErrInvalidVector is returned when a vector is invalid
 var ErrInvalidVector = errors.New("invalid vector")
 
-// encodeVector converts a float32 slice to bytes using little-endian encoding
-// EncodeVector encodes a float32 vector to bytes
+// EncodeVector encodes a float32 vector as its length (int32) followed by
+// its values (float32), all little-endian.
+//
+// The bytes are written directly. This used to go through binary.Write one
+// value at a time, an interface call and an allocation per float, and a scan
+// that decodes every stored vector paid that once per element per row.
 func EncodeVector(vector []float32) ([]byte, error) {
 	if vector == nil {
 		return nil, ErrInvalidVector
 	}
-
-	buf := new(bytes.Buffer)
-
-	// Write the length first - check for overflow
-	vectorLen := len(vector)
-	if vectorLen > 2147483647 { // max int32
-		return nil, fmt.Errorf("vector too large: %d elements exceeds maximum", vectorLen)
+	if len(vector) > math.MaxInt32 {
+		return nil, fmt.Errorf("vector too large: %d elements exceeds maximum", len(vector))
 	}
-	if err := binary.Write(buf, binary.LittleEndian, int32(vectorLen)); err != nil {
-		return nil, fmt.Errorf("failed to encode vector length: %w", err)
+	out := make([]byte, 4+4*len(vector))
+	binary.LittleEndian.PutUint32(out, uint32(int32(len(vector))))
+	for i, v := range vector {
+		binary.LittleEndian.PutUint32(out[4+4*i:], math.Float32bits(v))
 	}
-
-	// Write each float32 value
-	for _, val := range vector {
-		if err := binary.Write(buf, binary.LittleEndian, val); err != nil {
-			return nil, fmt.Errorf("failed to encode vector value: %w", err)
-		}
-	}
-
-	return buf.Bytes(), nil
+	return out, nil
 }
 
-// decodeVector converts bytes back to a float32 slice using little-endian encoding
-// DecodeVector decodes bytes to a float32 vector
+// DecodeVector decodes what EncodeVector wrote.
 func DecodeVector(data []byte) ([]float32, error) {
 	if len(data) < 4 {
 		return nil, ErrInvalidVector
 	}
-
-	buf := bytes.NewReader(data)
-
-	// Read the length first
-	var length int32
-	if err := binary.Read(buf, binary.LittleEndian, &length); err != nil {
-		return nil, fmt.Errorf("failed to decode vector length: %w", err)
-	}
-
+	length := int32(binary.LittleEndian.Uint32(data))
 	if length < 0 {
 		return nil, ErrInvalidVector
 	}
-
 	if length == 0 {
 		return []float32{}, nil
 	}
-
-	// Check if we have enough bytes for the vector
-	expectedBytes := int(length) * 4 // 4 bytes per float32
-	if buf.Len() < expectedBytes {
+	body := data[4:]
+	if len(body) < int(length)*4 {
 		return nil, ErrInvalidVector
 	}
-
-	// Read the vector values
 	vector := make([]float32, length)
-	for i := int32(0); i < length; i++ {
-		if err := binary.Read(buf, binary.LittleEndian, &vector[i]); err != nil {
-			return nil, fmt.Errorf("failed to decode vector value at index %d: %w", i, err)
-		}
+	for i := range vector {
+		vector[i] = math.Float32frombits(binary.LittleEndian.Uint32(body[4*i:]))
 	}
-
 	return vector, nil
 }
 

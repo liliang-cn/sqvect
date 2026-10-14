@@ -157,10 +157,18 @@ func (w watchedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 
 // unwrapEmbedder returns the embedder the caller configured.
 func unwrapEmbedder(e Embedder) Embedder {
-	if w, ok := e.(watchedEmbedder); ok {
-		return w.Embedder
+	for {
+		switch w := e.(type) {
+		case timedEmbedder:
+			e = w.Embedder
+		case watchedEmbedder:
+			e = w.Embedder
+		case cachedEmbedder:
+			e = w.Embedder
+		default:
+			return e
+		}
 	}
-	return e
 }
 
 // EmbedderStatus reports the embedder's recent answers and the memories still

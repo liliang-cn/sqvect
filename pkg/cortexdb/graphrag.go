@@ -494,7 +494,17 @@ func (db *DB) searchGraphRAG(ctx context.Context, query string, opts GraphRAGQue
 	if strings.TrimSpace(opts.EmbedText) != "" {
 		embedText = opts.EmbedText
 	}
-	queryVector, err := db.embedder.Embed(ctx, embedText)
+	// Bounded like a memory recall's when a keyword search runs beside this
+	// one (searchKnowledgeHybrid): it answers when this gives up, and a model
+	// that takes eight seconds otherwise takes the whole recall with it. A
+	// caller with nothing to fall back on waits for the model as before.
+	embedCtx := ctx
+	if keywordFallback(ctx) {
+		var cancelEmbed context.CancelFunc
+		embedCtx, cancelEmbed = context.WithTimeout(ctx, queryEmbedTimeout)
+		defer cancelEmbed()
+	}
+	queryVector, err := db.embedder.Embed(embedCtx, embedText)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
 	}

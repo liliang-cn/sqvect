@@ -44,8 +44,9 @@ func (e *stallingEmbedder) Dim() int { return 8 }
 // of waiting for as long as the caller is willing to — which was 24 seconds —
 // and the request's stages show where the time went.
 func TestARecallWithAStalledEmbedderAnswersByKeywordInTime(t *testing.T) {
+	previous := queryEmbedTimeout
 	queryEmbedTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { queryEmbedTimeout = 3 * time.Second })
+	t.Cleanup(func() { queryEmbedTimeout = previous })
 
 	emb := &stallingEmbedder{}
 	cfg := DefaultConfig(filepath.Join(t.TempDir(), "stall.db"))

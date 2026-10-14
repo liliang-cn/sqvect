@@ -43,6 +43,9 @@ type SQLiteStore struct {
 	checkpointStop chan struct{}
 	checkpointDone chan struct{}
 	checkpointOnce sync.Once
+	// vectorCache holds decoded message vectors per session; see
+	// chat_vector_cache.go.
+	vectorCache messageVectorCache
 }
 
 // New creates a new SQLite vector store with the given configuration
