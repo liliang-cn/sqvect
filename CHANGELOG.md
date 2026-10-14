@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.126.0] - 2026-10-14
+
+### Added
+
+- A session starts with an index of what the brain knows about its project.
+  The plugin's SessionStart hook (`cortexdb-mcp --session-context`) finds the
+  graph node of type `project` named like the working directory or its git
+  repository (case and punctuation ignored) and lists the memories that
+  mention it, newest first, one line each — id, date, first line — leaving out
+  superseded ones; `CORTEXDB_SESSION_CONTEXT_MAX` (default 30) caps it. The
+  first prompt of a session usually says too little for the per-prompt recall
+  to find anything.
+- Memories about files. A capture lists the files the session read and
+  modified, named from their repository root, and the model links each memory
+  to the files it is about as entities of type `file`. A new PreToolUse hook on
+  Read, Edit and Write (`--file-context`) hands the agent the current memories
+  about a file before it opens it, once per file per session.
+- `knowledge_memory_recall` takes `detail: "index"`: the same hits in the same
+  order, each cut to its first line, for a caller that picks what to read
+  before reading it. `memory_get` takes `memory_ids` to fetch several at once,
+  in order, listing unknown ids in `missing`.
+- Captures are scrubbed before the model sees them and before anything is
+  saved: text between `<private>` and `</private>` is removed, and credentials
+  in the shapes they are issued in (API keys, GitHub, AWS, Slack, Google and
+  npm tokens, `Bearer` tokens, PEM private keys, `password=`-style settings)
+  become `[REDACTED]`. This covers Claude Code, Codex and DeepSeek Harness
+  sessions, `import_agent_memory`'s session import and the cortexdb-live mod.
+- A captured fact that repeats a current memory word for word (case and
+  punctuation aside) is not saved again; the import reports such facts as
+  `duplicates`.
+
+### Fixed
+
+- A hook's context block could exceed what Claude Code passes on: past about
+  ten thousand characters it replaces `additionalContext` with a short
+  preview, so the model received none of the recall. Every hook block now stays
+  under 9,000 characters, dropping whole entries from the end and saying how
+  many it left out; the cortexdb-live mod's recall does the same.
+- Two tests failed for reasons outside the code: the hook tests inside a
+  session running the cortexdb-live mod, whose variables tell the hooks to
+  stand down, and the reembed backlog test whenever the background healer
+  filled the backlog first.
+
 ## [2.125.1] - 2026-10-14
 
 Thirty of these fixes came as pull requests from @rudycelekli (#9–#38), each
