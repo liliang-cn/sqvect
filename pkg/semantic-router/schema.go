@@ -157,7 +157,11 @@ func (fr *FunctionRouter) Route(ctx context.Context, text string) (*FunctionCall
 	}
 
 	// Extract parameters using the function schema
-	params, missing, err := fr.extractor.Extract(ctx, text, route.FunctionSchema)
+	extractor := route.FunctionSchema.Extractor
+	if extractor == nil {
+		extractor = fr.extractor
+	}
+	params, missing, err := extractor.Extract(ctx, text, route.FunctionSchema)
 	if err != nil {
 		return nil, fmt.Errorf("parameter extraction failed: %w", err)
 	}
