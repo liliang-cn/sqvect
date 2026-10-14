@@ -1,0 +1,137 @@
+.cortexdb-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2);
+}
+
+.cortexdb-bar {
+  display: flex;
+  gap: var(--size-4-1);
+  align-items: center;
+}
+
+.cortexdb-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.cortexdb-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.cortexdb-status.cortexdb-error {
+  color: var(--text-error);
+}
+
+.cortexdb-entities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-4-1);
+}
+
+.cortexdb-entities:empty {
+  display: none;
+}
+
+.cortexdb-chip {
+  font-size: var(--font-ui-smaller);
+  padding: 2px var(--size-4-2);
+  height: auto;
+  border-radius: var(--radius-l);
+  background: var(--background-modifier-hover);
+  box-shadow: none;
+}
+
+.cortexdb-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--size-4-2);
+}
+
+.cortexdb-hit {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: var(--size-4-2) var(--size-4-3);
+  background: var(--background-primary);
+}
+
+.cortexdb-hit-head {
+  display: flex;
+  gap: var(--size-4-2);
+  align-items: center;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+}
+
+.cortexdb-badge {
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cortexdb-memory .cortexdb-badge:first-child {
+  color: var(--color-accent);
+}
+
+.cortexdb-knowledge .cortexdb-badge:first-child {
+  color: var(--color-green);
+}
+
+.cortexdb-badge.cortexdb-old {
+  color: var(--text-faint);
+}
+
+.cortexdb-hit-title {
+  font-weight: var(--font-semibold);
+  margin: var(--size-2-2) 0;
+  overflow-wrap: anywhere;
+}
+
+.cortexdb-hit-body {
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.cortexdb-hit-body.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.cortexdb-hit-body:not(.is-clamped) {
+  white-space: normal;
+}
+
+.cortexdb-actions {
+  display: flex;
+  gap: var(--size-4-1);
+  align-items: center;
+  margin-top: var(--size-4-1);
+}
+
+.cortexdb-id {
+  margin-left: auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cortexdb-remember {
+  width: 100%;
+  min-height: 10em;
+  margin-bottom: var(--size-4-2);
+}
+
+.cortexdb-confirm {
+  white-space: pre-wrap;
+}

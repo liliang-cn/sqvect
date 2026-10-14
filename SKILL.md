@@ -1142,7 +1142,7 @@ listing that produced them, so handing a `memory_list_all` cursor to
 `graph_list_all`, or the reverse, fails loudly rather than silently returning
 the wrong page.
 
-## OpenClaw, Hermes and DeepSeek Harness Plugins
+## OpenClaw, Hermes, DeepSeek Harness and Obsidian Plugins
 
 Native host-memory adapters live under `plugins/`:
 
@@ -1159,6 +1159,16 @@ Native host-memory adapters live under `plugins/`:
   dsh installs plugins with pnpm, which refuses unapproved build scripts such
   as protobufjs's. Past dsh sessions import through `import_agent_memory`'s
   `dsh_sessions` source.
+- `plugins/obsidian-cortexdb` (Obsidian plugin id `cortexdb`, desktop only,
+  released as `cortexdb-obsidian.zip`) bundles the dsh plugin's gRPC client: a
+  side panel recalls on the open note with `knowledge_memory_recall` (memories,
+  knowledge, entity chips); commands save a selection with `memory_save` and
+  notes with `knowledge_save` as `obsidian:<vault>/<path>`, re-sending only
+  changed notes and deleting removed ones; *Export the brain* writes
+  `memory_list_all` and `graph_list_all` (id walk) into a folder of memory and
+  entity notes linked by wikilinks, whose edited bodies go back through
+  `memory_update`. The token is an Obsidian `SecretStorage` secret, never in
+  the vault.
 
 All adapters call the existing gRPC `ToolsService` and prefer
 `knowledge_memory_recall`; do not implement a separate retrieval or storage path

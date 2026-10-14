@@ -59,8 +59,10 @@ jobs:
           live_ver=$(extract plugins/cortexdb-live/.claude-plugin/plugin.json)
           market_ver=$(extract .claude-plugin/marketplace.json)
           dsh_ver=$(extract plugins/dsh-cortexdb-memory/package.json)
-          echo "version.go=$go_ver claude=$claude_ver codex=$codex_ver live=$live_ver marketplace=$market_ver dsh=$dsh_ver"
-          for v in "$claude_ver" "$codex_ver" "$live_ver" "$market_ver" "$dsh_ver"; do
+          obsidian_ver=$(extract plugins/obsidian-cortexdb/manifest.json)
+          obsidian_pkg_ver=$(extract plugins/obsidian-cortexdb/package.json)
+          echo "version.go=$go_ver claude=$claude_ver codex=$codex_ver live=$live_ver marketplace=$market_ver dsh=$dsh_ver obsidian=$obsidian_ver/$obsidian_pkg_ver"
+          for v in "$claude_ver" "$codex_ver" "$live_ver" "$market_ver" "$dsh_ver" "$obsidian_ver" "$obsidian_pkg_ver"; do
             if [ "$v" != "$go_ver" ]; then
               echo "::error::Version mismatch: version.go ($go_ver) must match all plugin manifests. The MCP launcher pins its binary download to the plugin version, so a stale manifest ships a stale server."
               exit 1
@@ -131,6 +133,26 @@ jobs:
           npm ci --ignore-scripts
           npm test
 
+  obsidian-plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/obsidian-cortexdb
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Test and build
+        run: |
+          npm ci --ignore-scripts
+          npm test
+          npm run build
+
   release:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
@@ -196,5 +218,38 @@ jobs:
             dist/cortexdb-grpc_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz.sha256
             dist/cortexdb-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
             dist/cortexdb-mcp-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-obsidian:
+    needs: [release, obsidian-plugin]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Package the Obsidian plugin
+        working-directory: plugins/obsidian-cortexdb
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          mkdir -p dist/cortexdb
+          cp main.js manifest.json styles.css dist/cortexdb/
+          (cd dist && zip -r cortexdb-obsidian.zip cortexdb && shasum -a 256 cortexdb-obsidian.zip > cortexdb-obsidian.zip.sha256)
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            plugins/obsidian-cortexdb/dist/cortexdb-obsidian.zip
+            plugins/obsidian-cortexdb/dist/cortexdb-obsidian.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

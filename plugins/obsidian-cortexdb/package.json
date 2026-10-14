@@ -1,0 +1,16 @@
+{
+  "name": "obsidian-cortexdb",
+  "version": "2.126.0",
+  "private": true,
+  "description": "CortexDB for Obsidian: what the brain knows about the open note, notes saved to it, and the brain exported as a vault",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "obsidian": "1.13.1"
+  }
+}

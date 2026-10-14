@@ -15,6 +15,7 @@
 | Codex | `codex plugin marketplace add liliang-cn/cortexdb && codex plugin add cortexdb@cortexdb` |
 | Claude Code mod（可选） | `/plugin install cortexdb-live@cortexdb` |
 | DeepSeek Harness | `dsh plugin --profile web add "github:liliang-cn/cortexdb#semver:^2&path:/plugins/dsh-cortexdb-memory"`（[说明](plugins/dsh-cortexdb-memory/README.md)） |
+| Obsidian | 把 release 里的 `cortexdb-obsidian.zip` 解压到 `<vault>/.obsidian/plugins/`（[说明](plugins/obsidian-cortexdb/README.md)） |
 | 共享大脑服务端 | `go install github.com/liliang-cn/cortexdb/v2/cmd/cortexdb-grpc@latest` |
 | 客户端 | `cargo add cortexdb-client` · `pip install cortexdb-client` · `npm install cortexdb-client` |
 

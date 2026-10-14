@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- An Obsidian plugin (`plugins/obsidian-cortexdb`, released as
+  `cortexdb-obsidian.zip`). A side panel shows what the brain knows about the
+  open note — memories, knowledge, and the entities they touch — and answers
+  typed questions. Commands remember a selection as a memory, and send a note
+  or the vault as knowledge documents (`obsidian:<vault>/<path>`, only changed
+  notes, deleted ones taken out, optionally as you write). *Export the brain*
+  writes every memory and entity as linked notes, so the graph view and
+  backlinks show the brain; an edited memory note goes back through
+  `memory_update`. The server token lives in Obsidian's keychain, not the vault.
+
+### Fixed
+
+- `cortexdb-grpc -h` printed `$CORTEXDB_GRPC_TOKEN`: the flag took the token
+  as its default, and the help screen shows defaults. The token is now read
+  from the environment after the flags are parsed.
+
 ### Changed
 
 - The DeepSeek Harness plugin installs from this repository's release tags
