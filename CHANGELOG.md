@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.127.1] - 2026-10-14
+
+### Fixed
+
+- Knowledge snippets, graphflow summaries and rule-syntax errors were cut at
+  a byte count, which in Chinese, Japanese or Korean text lands inside a
+  character and leaves U+FFFD (`高可用�`) at the end. They are cut at a
+  character count now; a snippet is 180 characters.
+- The Obsidian panel no longer repeats a knowledge document's title at the
+  start of its snippet, and expanding a card shows its text as it is, rather
+  than rendering a flattened snippet that begins with `#` as one large heading.
+
+### Added
+
+- The Obsidian panel reads a result in full: its title, or the expand button,
+  opens the whole memory or the whole knowledge document rendered as Markdown.
+  Copy and insert take the full text.
+
 ## [2.127.0] - 2026-10-14
 
 ### Added
