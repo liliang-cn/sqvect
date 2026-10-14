@@ -163,12 +163,15 @@ func dedupeEdges(edges []ExtractionEdge) []ExtractionEdge {
 	return out
 }
 
+// summarize cuts text to max characters — characters, so a cut never
+// splits a multi-byte one.
 func summarize(text string, max int) string {
 	text = strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
-	if len(text) <= max {
+	runes := []rune(text)
+	if len(runes) <= max {
 		return text
 	}
-	return text[:max] + "..."
+	return string(runes[:max]) + "..."
 }
 
 func splitSentences(text string) []string {

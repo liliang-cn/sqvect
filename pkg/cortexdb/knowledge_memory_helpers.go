@@ -6,12 +6,16 @@ import (
 	"strings"
 )
 
+// compactSnippet is content on one line, cut to 180 characters. It counts
+// and cuts in characters, not bytes: a byte cut lands inside a CJK character
+// and the snippet ends in U+FFFD.
 func compactSnippet(content string) string {
 	content = strings.TrimSpace(strings.Join(strings.Fields(content), " "))
-	if len(content) <= 180 {
+	runes := []rune(content)
+	if len(runes) <= 180 {
 		return content
 	}
-	return content[:177] + "..."
+	return string(runes[:177]) + "..."
 }
 
 func cloneStringMap(values map[string]string) map[string]string {

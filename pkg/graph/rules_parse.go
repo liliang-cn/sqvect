@@ -33,8 +33,8 @@ type RuleParseError struct {
 
 func (e *RuleParseError) Error() string {
 	near := strings.TrimSpace(e.Source[min(e.Offset, len(e.Source)):])
-	if len(near) > 24 {
-		near = near[:24] + "…"
+	if r := []rune(near); len(r) > 24 {
+		near = string(r[:24]) + "…"
 	}
 	if near == "" {
 		return fmt.Sprintf("rule syntax error at offset %d (end of input): %s", e.Offset, e.Message)
