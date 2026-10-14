@@ -3,6 +3,7 @@ package semanticrouter
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
@@ -219,7 +220,7 @@ func (r *Router) Route(ctx context.Context, query string) (*RouteResult, error) 
 	defer r.mu.RUnlock()
 
 	var bestRoute *Route
-	var maxScore float64
+	maxScore := math.Inf(-1)
 
 	// Find the best matching route
 	for _, route := range r.routes {
@@ -237,11 +238,10 @@ func (r *Router) Route(ctx context.Context, query string) (*RouteResult, error) 
 		}
 	}
 
-	result := &RouteResult{
-		Score: maxScore,
-	}
+	result := &RouteResult{}
 
 	if bestRoute != nil {
+		result.Score = maxScore
 		result.RouteName = bestRoute.Name
 		result.Handler = bestRoute.Handler
 		result.Matched = maxScore >= r.config.Threshold
