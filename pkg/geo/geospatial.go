@@ -304,20 +304,43 @@ func (g *GeoIndex) getGridKey(coord Coordinate) int64 {
 	return (gridX << 32) | (gridY & 0xFFFFFFFF)
 }
 
-// getCandidateCells returns points from grid cells that might contain results
+// getCandidateCells returns points from grid cells that might contain results.
+// The caller holds g.mu.
 func (g *GeoIndex) getCandidateCells(center Coordinate, radiusKM float64) []*GeoPoint {
-	// Calculate how many grid cells we need to check
-	// At equator, 1 degree ≈ 111km
-	degreesRadius := radiusKM / 111.0
-	cellsRadius := int64(math.Ceil(degreesRadius / g.gridSize))
+	// Angular radius of the search circle, in degrees of arc.
+	angular := radiusKM / EarthRadiusKM
+	latDelta := angular * 180 / math.Pi
+	minLat, maxLat := center.Lat-latDelta, center.Lat+latDelta
 
-	centerGridX := int64(center.Lng / g.gridSize)
-	centerGridY := int64(center.Lat / g.gridSize)
+	// A degree of longitude shrinks with latitude, and the circle spans every
+	// longitude once it reaches a pole or covers more than a half turn.
+	var lngDelta float64
+	switch {
+	case minLat <= -90 || maxLat >= 90 || angular >= math.Pi/2:
+		lngDelta = 180
+	default:
+		lngDelta = math.Asin(math.Sin(angular)/math.Cos(center.Lat*math.Pi/180)) * 180 / math.Pi
+		if math.IsNaN(lngDelta) {
+			lngDelta = 180
+		}
+	}
+	minLng, maxLng := center.Lng-lngDelta, center.Lng+lngDelta
+
+	// Fall back to every point when the window wraps the antimeridian or
+	// covers more cells than there are points.
+	if minLng < -180 || maxLng > 180 {
+		return g.allPoints()
+	}
+	minX, maxX := int64(minLng/g.gridSize), int64(maxLng/g.gridSize)
+	minY, maxY := int64(math.Max(minLat, -90)/g.gridSize), int64(math.Min(maxLat, 90)/g.gridSize)
+	if (maxX-minX+1)*(maxY-minY+1) > int64(len(g.points)) {
+		return g.allPoints()
+	}
 
 	var candidates []*GeoPoint
-	for dx := -cellsRadius; dx <= cellsRadius; dx++ {
-		for dy := -cellsRadius; dy <= cellsRadius; dy++ {
-			gridKey := ((centerGridX + dx) << 32) | ((centerGridY + dy) & 0xFFFFFFFF)
+	for x := minX; x <= maxX; x++ {
+		for y := minY; y <= maxY; y++ {
+			gridKey := (x << 32) | (y & 0xFFFFFFFF)
 			if cells, ok := g.grid[gridKey]; ok {
 				candidates = append(candidates, cells...)
 			}
@@ -325,6 +348,15 @@ func (g *GeoIndex) getCandidateCells(center Coordinate, radiusKM float64) []*Geo
 	}
 
 	return candidates
+}
+
+// allPoints returns every indexed point. The caller holds g.mu.
+func (g *GeoIndex) allPoints() []*GeoPoint {
+	points := make([]*GeoPoint, 0, len(g.points))
+	for _, point := range g.points {
+		points = append(points, point)
+	}
+	return points
 }
 
 // haversineDistance calculates the great-circle distance between two points in kilometers
