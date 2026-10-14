@@ -955,6 +955,12 @@ func (ev *evaluator) evalFunc(f *FuncCall, r row) (any, error) {
 			if len(out) > 100000 {
 				return nil, &Error{Kind: ErrBudget, Pos: -1, Msg: "range() longer than 100000 elements"}
 			}
+			// Once the next step would overflow, it is also past every
+			// representable endpoint in this direction. Do not wrap around
+			// and grow a bounded range until it hits the work budget.
+			if step > 0 && v > math.MaxInt64-step || step < 0 && v < math.MinInt64-step {
+				break
+			}
 		}
 		if out == nil {
 			out = []any{}
