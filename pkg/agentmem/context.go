@@ -46,19 +46,26 @@ func (s *Store) GetContext(ctx context.Context, scope Scope, slot ContextSlot) (
 // AppendContext appends content to a slot, creating it if missing. A newline
 // separator is inserted between the existing content and the new section.
 func (s *Store) AppendContext(ctx context.Context, scope Scope, slot ContextSlot, content string) error {
-	current, err := s.GetContext(ctx, scope, slot)
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return err
+	if slot == "" {
+		return fmt.Errorf("agentmem: empty slot")
 	}
-	if current != "" {
-		if !strings.HasSuffix(current, "\n") {
-			current += "\n"
-		}
-		current += content
-	} else {
-		current = content
+	bank := BankID(normalizeScope(scope))
+	_, err := s.exec(ctx, `
+		INSERT INTO agentmem_context_slots (bank_id, slot, content, updated_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(bank_id, slot) DO UPDATE SET
+			content = CASE
+				WHEN agentmem_context_slots.content = '' THEN excluded.content
+				WHEN substr(agentmem_context_slots.content, length(agentmem_context_slots.content), 1) = ?
+					THEN agentmem_context_slots.content || excluded.content
+				ELSE agentmem_context_slots.content || ? || excluded.content
+			END,
+			updated_at = excluded.updated_at
+	`, bank, string(slot), content, time.Now().UTC(), "\n", "\n")
+	if err != nil {
+		return fmt.Errorf("agentmem: append context: %w", err)
 	}
-	return s.SetContext(ctx, scope, slot, current)
+	return nil
 }
 
 // DeleteContext removes a slot.
