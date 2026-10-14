@@ -264,6 +264,7 @@ Rules:
 - The transcript is the part of the session not yet captured; memories already written from earlier parts are listed. Reuse one's slug only to replace it with a corrected or extended version; never repeat one.
 - slug: short kebab-case ascii. importance: 0.3 routine fact, 0.6 useful decision, 0.85+ hard-won lesson or standing preference.
 - entities: the concrete named things (projects, hosts, services, people) each memory is about.
+- When a memory is about specific files listed under FILES, add each of those files as an entity of type "file", named exactly as listed. Leave out files a memory is not about; a memory about none has no file entities.
 
 Respond with JSON only: {"memories":[{"slug":"...","content":"...","importance":0.6,"type":"fact|decision|preference|lesson","entities":[{"name":"...","type":"..."}]}]}`
 
@@ -422,7 +423,8 @@ async function capture($: EngineInterface) {
     const from = mark.lastKey === '' ? -1 : history.map(keyOf).lastIndexOf(mark.lastKey)
     const fresh = history.slice(from + 1)
 
-    const { digest, userTurns } = digestOf(fresh)
+    const root = (await $.session.root?.().catch(() => '')) ?? ''
+    const { digest, userTurns } = digestOf(fresh, root)
     if (userTurns < CAPTURE_MIN_USER_TURNS) return
 
     const already = mark.memories.map(m => `- ${m.slug}: ${clip(m.content, 300)}`).join('\n')
@@ -614,14 +616,22 @@ type RecallPayload = {
 
 // The text the model reads: the same block the shell hook writes, so an agent
 // sees one thing whichever of the two answered.
+// Cut whole lines from the end under the budget the shell hook keeps
+// (hook_budget.go): an oversized block reaches the model as a short preview.
+const CONTEXT_BUDGET = 9000
 const contextOf = (hits: RecallHit[]) => {
   if (hits.length === 0) return ''
-  const lines = hits.map(hit => `- ${hit.title}: ${hit.snippet}`)
-  return [
-    `${SHELL_HEADER} (retrieved automatically — verify before relying on them):`,
-    ...lines,
-    '(If this exchange states a durable preference, decision, or fact, save it with memory_save / knowledge_save.)',
-  ].join('\n')
+  const header = `${SHELL_HEADER} (retrieved automatically — verify before relying on them):`
+  const footer = '(If this exchange states a durable preference, decision, or fact, save it with memory_save / knowledge_save.)'
+  const all = hits.map(hit => `- ${hit.title}: ${hit.snippet}`)
+  let kept = all
+  let note = ''
+  const size = (parts: string[]) => parts.reduce((n, p) => n + [...p].length + 1, 0)
+  while (kept.length > 0 && size([header, footer, note, ...kept]) > CONTEXT_BUDGET) {
+    kept = kept.slice(0, -1)
+    note = `(${all.length - kept.length} more not shown here; ask CortexDB for them with knowledge_memory_recall.)`
+  }
+  return [header, ...kept, ...(note ? [note] : []), footer].join('\n')
 }
 
 // The shell capture's digestTranscript: what the person typed and what the
@@ -629,24 +639,76 @@ const contextOf = (hits: RecallHit[]) => {
 const NOISE =
   /<(system-reminder|local-command-caveat|command-name|command-message|command-args|local-command-stdout|task-notification)>[\s\S]*?<\/\1>|\[SYSTEM NOTIFICATION[^\]]*\][\s\S]*/g
 
-const digestOf = (messages: readonly Message[]) => {
+// The shell capture's scrubForCapture (cmd/cortexdb-mcp-stdio/scrub.go): text
+// between <private> tags never reaches the model, and credentials in the shapes
+// they are issued in become [REDACTED] before anything is distilled or stored.
+const PRIVATE = /<private>[\s\S]*?(?:<\/private>|$)/gi
+const SECRETS = [
+  /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/g,
+  /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g,
+  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}/g,
+  /\bgithub_pat_[A-Za-z0-9_]{22,}/g,
+  /\bglpat-[A-Za-z0-9_-]{20,}/g,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g,
+  /\bxox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /\bAIza[0-9A-Za-z_-]{35}/g,
+  /\bnpm_[A-Za-z0-9]{36}/g,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/gi,
+]
+const ASSIGNED_SECRET =
+  /\b([A-Za-z0-9_]*(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)[A-Za-z0-9_]*)(\s*[:=]\s*)("[^"\s]{6,}"|'[^'\s]{6,}'|[^\s"',;]{6,})/gi
+const scrubForCapture = (text: string) =>
+  SECRETS.reduce((t, re) => t.replace(re, '[REDACTED]'), text.replace(PRIVATE, '')).replace(ASSIGNED_SECRET, '$1$2[REDACTED]')
+
+// The files a session read and modified, named from the project root, as the
+// shell capture's FILES block (cmd/cortexdb-mcp-stdio/files.go): the model
+// links each memory to the ones it is about.
+const FILE_TOOLS = new Set(['Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+const filesOf = (messages: readonly Message[], root: string) => {
+  const modified: string[] = []
+  const read: string[] = []
+  const prefix = root.endsWith('/') ? root : `${root}/`
+  for (const m of messages) {
+    for (const use of m.toolUses as { tool?: string; input?: Record<string, unknown> }[]) {
+      const tool = use?.tool ?? ''
+      const raw = use?.input?.file_path ?? use?.input?.notebook_path
+      if (!FILE_TOOLS.has(tool) || typeof raw !== 'string' || raw === '') continue
+      const name = root && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
+      const list = EDIT_TOOLS.has(tool) ? modified : read
+      if (!list.includes(name) && modified.length + read.length < 40) list.push(name)
+    }
+  }
+  const onlyRead = read.filter(f => !modified.includes(f)).sort()
+  if (modified.length + onlyRead.length === 0) return ''
+  return [
+    'FILES (paths from the repository root)',
+    ...(modified.length ? [`modified: ${modified.join(', ')}`] : []),
+    ...(onlyRead.length ? [`read: ${onlyRead.join(', ')}`] : []),
+    '',
+    '',
+  ].join('\n')
+}
+
+const digestOf = (messages: readonly Message[], root = '') => {
   const lines: string[] = []
   let userTurns = 0
   for (const m of messages) {
     if (m.role === 'user') {
-      const text = m.text.replace(NOISE, '').trim()
+      const text = scrubForCapture(m.text.replace(NOISE, '')).trim()
       if (text === '') continue
       userTurns += 1
       lines.push(`USER: ${clip(text, 2000)}`)
-    } else if (m.text.trim() !== '') {
-      lines.push(`ASSISTANT: ${clip(m.text, 1200)}`)
+    } else {
+      const text = scrubForCapture(m.text).trim()
+      if (text !== '') lines.push(`ASSISTANT: ${clip(text, 1200)}`)
     }
   }
   const head = 6000
   const tail = 22000
   const all = lines.join('\n')
-  const digest = all.length > head + tail ? `${all.slice(0, head)}\n[...trimmed...]\n${all.slice(-tail)}` : all
-  return { digest, userTurns }
+  const body = all.length > head + tail ? `${all.slice(0, head)}\n[...trimmed...]\n${all.slice(-tail)}` : all
+  return { digest: filesOf(messages, root) + body, userTurns }
 }
 
 // Models fence JSON on a whim and the odd reply loses its last closer.

@@ -164,9 +164,11 @@ type importSourceOut struct {
 	Retired int `json:"retired,omitempty"`
 	// Outdated counts facts from an old session that a later memory already
 	// contradicts; they are not saved.
-	Outdated int      `json:"outdated,omitempty"`
-	Note     string   `json:"note,omitempty"`
-	Sample   []string `json:"sample,omitempty"`
+	Outdated int `json:"outdated,omitempty"`
+	// Duplicates counts facts a current memory already states word for word.
+	Duplicates int      `json:"duplicates,omitempty"`
+	Note       string   `json:"note,omitempty"`
+	Sample     []string `json:"sample,omitempty"`
 }
 
 type importAgentMemoryOut struct {
@@ -515,7 +517,7 @@ func digestCodexRollout(path string) (string, int, error) {
 			userTurns++
 			fmt.Fprintf(&b, "USER: %s\n", clip(text, 2000))
 		case "assistant":
-			if text != "" {
+			if text = strings.TrimSpace(scrubForCapture(text)); text != "" {
 				fmt.Fprintf(&b, "ASSISTANT: %s\n", clip(text, 1200))
 			}
 		}
@@ -575,6 +577,10 @@ func (a agentImport) importSessions(ctx context.Context, src string, all []trans
 				}
 				if !plan.apply(f.Slug, &req) {
 					res.Outdated++
+					continue
+				}
+				if duplicateOf(ctx, a.w, req) != "" {
+					res.Duplicates++
 					continue
 				}
 				req.Metadata["source"] = "imported-session"

@@ -1,0 +1,25 @@
+#!/bin/sh
+# Prints the path of the cortexdb-mcp binary the plugin has already fetched,
+# or nothing. Hooks run on every session start and every file read, so they
+# never download: until the MCP launcher has fetched the binary they stay quiet.
+#
+# $CORTEXDB_MCP_BIN wins; then the version-pinned copy in the cache the MCP
+# launcher writes, then an unversioned one.
+set -eu
+if [ -n "${CORTEXDB_MCP_BIN:-}" ] && [ -x "${CORTEXDB_MCP_BIN}" ]; then
+  printf '%s\n' "${CORTEXDB_MCP_BIN}"
+  exit 0
+fi
+case "$(uname -s)" in Darwin) goos=darwin ;; Linux) goos=linux ;; *) exit 0 ;; esac
+case "$(uname -m)" in x86_64|amd64) goarch=amd64 ;; arm64|aarch64) goarch=arm64 ;; *) exit 0 ;; esac
+asset="cortexdb-mcp-${goos}-${goarch}"
+self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+bin_cache_dir="${CLAUDE_PLUGIN_DATA:-${XDG_CACHE_HOME:-$HOME/.cache}/cortexdb}/bin"
+plugin_root="${CLAUDE_PLUGIN_ROOT:-${self}/..}"
+version="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "${plugin_root}/.claude-plugin/plugin.json" 2>/dev/null | head -n1)"
+if [ -n "$version" ] && [ -x "${bin_cache_dir}/${asset}-${version}" ]; then
+  printf '%s\n' "${bin_cache_dir}/${asset}-${version}"
+elif [ -x "${bin_cache_dir}/${asset}" ]; then
+  printf '%s\n' "${bin_cache_dir}/${asset}"
+fi

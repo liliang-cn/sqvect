@@ -42,6 +42,9 @@ type KnowledgeMemoryRecallRequest struct {
 	MaxTraversalNodes   int            `json:"max_traversal_nodes,omitempty"`
 	MaxEntitiesPerChunk int            `json:"max_entities_per_chunk,omitempty"`
 	Plan                *RetrievalPlan `json:"plan,omitempty"`
+	// Detail is "full" (the default) or "index": the same hits, each cut to
+	// its first line, for a caller that picks what to read before reading it.
+	Detail string `json:"detail,omitempty"`
 	// PPR tunes retrieval_mode "ppr" for both the memory and the knowledge
 	// half of the recall; ignored by every other mode.
 	PPR *PPRRetrievalOptions `json:"ppr,omitempty"`
@@ -79,6 +82,8 @@ type KnowledgeMemoryRecallResponse struct {
 	Entities          []string                   `json:"entities,omitempty"`
 	GraphFacts        []KnowledgeMemoryGraphFact `json:"graph_facts,omitempty"`
 	ContextPack       KnowledgeMemoryContextPack `json:"context_pack"`
+	// Detail is "index" when the hits were cut to their first lines.
+	Detail string `json:"detail,omitempty"`
 }
 
 // KnowledgeMemoryGraphFact is a single entity↔entity relation surfaced from the

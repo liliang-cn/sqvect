@@ -57,6 +57,7 @@ func KnowledgeMemoryFacadeToolDefinitions() []ToolDefinition {
 					"max_entities_per_chunk": toolIntegerSchema("Optional cap on graph-derived entities attached to each chunk."),
 					"ppr":                    toolPPROptionsSchema(),
 					"plan":                   toolRetrievalPlanSchema("Optional structured retrieval plan."),
+					"detail":                 toolEnumSchema("full (default) returns every hit whole. index returns the same hits cut to their first line, with ids: pick the ones you need, then fetch them with memory_get memory_ids or knowledge_get. Use index for broad questions where most hits will not be read.", RecallDetailFull, RecallDetailIndex),
 				},
 			),
 		},

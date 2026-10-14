@@ -29,7 +29,7 @@ rec, _ := brain.Recall(ctx, cortexdb.KnowledgeMemoryRecallRequest{Query: "Alice 
 fmt.Println(rec.ContextPack.Text)
 ```
 
-插件给 Claude Code 和 Codex 一个全局大脑 `~/.cortexdb/cortexdb.db`，带 `/remember`、`/recall` 和自动召回 hook。多个 agent、多台机器指向同一个 `cortexdb-grpc`，就共享同一份记忆和图谱。
+插件给 Claude Code 和 Codex 一个全局大脑 `~/.cortexdb/cortexdb.db`，带 `/remember`、`/recall` 和自动召回 hook。会话一开始就拿到大脑里关于当前项目的近况索引；agent 打开一个文件前，会先被告知这个文件以前发生过什么；会话里的长期事实会被自动记下，`<private>` 里的内容和密钥不会进去。多个 agent、多台机器指向同一个 `cortexdb-grpc`，就共享同一份记忆和图谱。
 
 Codex 中需要在 `/hooks` 审阅并信任插件 hooks，自动召回才会运行。
 配置和 `cortexdb-mcp --doctor --self-test` 诊断用法见[插件指南](plugins/cortexdb/README.md)；诊断命令需要 v2.119.0 或更新版本的二进制。

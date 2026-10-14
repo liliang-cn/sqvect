@@ -117,6 +117,9 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 	if len(resp.Entities) == 0 {
 		resp.Entities = resp.ContextPack.Entities
 	}
+	if strings.EqualFold(strings.TrimSpace(req.Detail), RecallDetailIndex) {
+		indexRecall(resp)
+	}
 	return resp, nil
 }
 

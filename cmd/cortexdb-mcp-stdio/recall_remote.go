@@ -137,9 +137,7 @@ func snippetOf(content string) string {
 // formatRecallHits renders hits as the additionalContext block. Shared by both
 // paths so the text an agent sees never depends on where the brain lives.
 func formatRecallHits(hits []recallHit) string {
-	var b strings.Builder
-	b.WriteString("Relevant CortexDB memories for this prompt (retrieved automatically — verify before relying on them):\n")
-	wrote := false
+	var lines []string
 	for _, hit := range hits {
 		snippet := strings.TrimSpace(hit.Snippet)
 		if snippet == "" {
@@ -149,18 +147,16 @@ func formatRecallHits(hits []recallHit) string {
 		if title == "" {
 			title = hit.KnowledgeID
 		}
-		b.WriteString("- ")
-		b.WriteString(title)
-		b.WriteString(": ")
-		b.WriteString(snippet)
-		b.WriteString("\n")
-		wrote = true
+		lines = append(lines, "- "+title+": "+snippet)
 	}
-	if !wrote {
+	if len(lines) == 0 {
 		return ""
 	}
 	// Nudge the save side too: recall keeps the brain useful only if new durable
 	// facts also get written back.
-	b.WriteString("(If this exchange states a durable preference, decision, or fact, save it with memory_save / knowledge_save.)")
-	return b.String()
+	return fitHookContext(
+		"Relevant CortexDB memories for this prompt (retrieved automatically — verify before relying on them):",
+		lines,
+		"(If this exchange states a durable preference, decision, or fact, save it with memory_save / knowledge_save.)",
+	)
 }

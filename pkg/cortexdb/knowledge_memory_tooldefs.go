@@ -320,11 +320,12 @@ func KnowledgeMemoryToolDefinitions() []ToolDefinition {
 		},
 		{
 			Name:        "memory_get",
-			Description: "Fetch one memory item by ID.",
+			Description: "Fetch a memory by ID, or several at once with memory_ids (in the order given; ids that do not exist are listed in missing).",
 			InputSchema: toolObjectSchema(
-				[]string{"memory_id"},
+				nil,
 				map[string]any{
-					"memory_id": toolStringSchema("Stable memory ID."),
+					"memory_id":  toolStringSchema("Stable memory ID."),
+					"memory_ids": toolStringArraySchema("Several memory IDs, e.g. the ones picked from a recall with detail \"index\"."),
 				},
 			),
 		},

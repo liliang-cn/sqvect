@@ -59,6 +59,7 @@ ${CLAUDE_PLUGIN_ROOT}/bin/cortexdb-mcp.cmd
 | `CORTEXDB_REMOTE` | _(unset)_ | `host:port` of a central `cortexdb-grpc`. **Setting it switches the MCP server into shared-brain client mode**: it opens no local database and forwards every tool call to that one server, so Claude Code, Codex, VMs and other machines all use the same brain. See [Shared brain](#shared-brain-one-cortexdb-many-agents-and-machines). |
 | `CORTEXDB_GRPC_TOKEN` | _(unset)_ | Bearer token for `CORTEXDB_REMOTE`; must match the token the server was started with. |
 | `CORTEXDB_RECALL_TOPK` | `3` | How many matched memories the auto-recall hook injects per prompt (see below). |
+| `CORTEXDB_SESSION_CONTEXT_MAX` | `30` | How many of the project's memories the SessionStart index lists (see [Proactive memory](#proactive-memory-sessionstart)). |
 | `CORTEXDB_EMBED_BASE_URL` | _(unset)_ | OpenAI-compatible `/embeddings` base URL. **Setting it turns on semantic retrieval** (hybrid vector + lexical). Point it at any provider, including a local Ollama: `http://localhost:11434/v1`. `OPENAI_BASE_URL` is accepted as a fallback (parity with `cortexdb-grpc`). |
 | `CORTEXDB_EMBED_MODEL` | `text-embedding-3-small` | Embedding model name (e.g. `embeddinggemma` for a local Ollama). |
 | `CORTEXDB_EMBED_DIM` | `1536` | Embedding dimension — must match the model (e.g. `768` for `embeddinggemma`). |
@@ -158,6 +159,8 @@ Notes:
 
 When auto-recall is enabled, a `SessionStart` hook injects a short standing directive each session so the assistant uses the brain **proactively** — recall relevant context before answering, and save durable preferences/decisions/facts without being asked. It respects the same on/off switch as auto-recall, so it stays silent on machines where you declined.
 
+With it comes an index of what the brain knows about the project the session starts in (`cortexdb-mcp --session-context`): the project is the graph node of type `project` named like the working directory or its git repository (case and punctuation ignored, so `cortex-db` finds `CortexDB`), and the index lists the memories that mention it, newest first, one line each — id, date, first line — leaving out superseded ones. The first prompt of a session ("carry on", "what's left?") gives the per-prompt recall nothing to search on; this is what the agent knows before it. It is an index on purpose: the agent fetches the ones it needs whole with `memory_get` `memory_ids`. At most `CORTEXDB_SESSION_CONTEXT_MAX` (default 30) entries.
+
 ## Auto-recall (Claude Code and Codex)
 
 The plugin ships a `UserPromptSubmit` hook (`hooks/hooks.json` → `bin/cortexdb-recall`) that searches the configured local or remote brain for memories relevant to what you just typed and injects the top matches into context. In Codex it runs after you trust the hook through `/hooks`.
@@ -167,7 +170,7 @@ It is built to stay out of the way:
 - **Local or remote.** It uses `CORTEXDB_REMOTE` when configured, without requiring a local database. In local mode it looks for `$CORTEXDB_PATH` (else the global `~/.cortexdb/cortexdb.db`) and stays silent if that file does not exist.
 - **Asked once.** The first time it runs on a machine with a database present, it asks (via Claude) whether you want auto-recall, and remembers your answer in `${XDG_CACHE_HOME:-~/.cache}/cortexdb/autorecall`.
 - **Never blocks.** Any error — missing binary, query failure, no matches — exits silently so your prompt is never delayed.
-- **Bounded.** Injects at most `CORTEXDB_RECALL_TOPK` (default 3) snippets.
+- **Bounded.** Injects at most `CORTEXDB_RECALL_TOPK` (default 3) snippets, and no hook's block exceeds 9,000 characters: Claude Code replaces a larger `additionalContext` with a short preview, so the model would receive none of it. Entries are dropped whole from the end, and the block says how many were left out.
 
 Toggle it any time:
 
@@ -175,6 +178,19 @@ Toggle it any time:
 ${CLAUDE_PLUGIN_ROOT}/bin/cortexdb-recall --enable    # turn on
 ${CLAUDE_PLUGIN_ROOT}/bin/cortexdb-recall --disable   # turn off
 ```
+
+## Memories about files (PreToolUse)
+
+A capture lists the files the session read and modified, named from their repository root (`pkg/cortexdb/brain.go`), and links each memory to the files it is about as entities of type `file`. A `PreToolUse` hook on `Read`, `Edit` and `Write` (`bin/cortexdb-file-context` → `cortexdb-mcp --file-context`) then hands the agent the current memories about a file before it opens it — "the race in CachedEmbedder was fixed with a mutex on 2026-10-13" before it reads the code, not after it has worked it out again. Each file is looked up once per session, a file the brain knows nothing about adds nothing, and the block is capped at 3,000 characters. It follows the auto-recall switch.
+
+## Privacy: `<private>` and credentials
+
+What a capture sends to the model that distils it, and what it saves, is scrubbed first:
+
+- **`<private>…</private>`** — anything you wrap in these tags is removed before the session is distilled, in your messages and the assistant's. An unclosed tag hides the rest of that message.
+- **Credentials** in the shapes they are issued in — `sk-…` API keys, GitHub `ghp_`/`github_pat_` tokens, AWS `AKIA…` keys, Slack `xox…`, Google `AIza…`, npm tokens, `Bearer` tokens, PEM private keys, and `password=`/`token:`/`API_KEY="…"` settings — become `[REDACTED]`; the setting's name is kept. Commit hashes and UUIDs are left alone.
+
+The same scrubbing covers Codex and DeepSeek Harness sessions, `import_agent_memory`'s session import, and the cortexdb-live mod's capture. A fact that repeats a current memory word for word (case and punctuation aside) is not saved again.
 
 ## Diagnose startup and memory
 

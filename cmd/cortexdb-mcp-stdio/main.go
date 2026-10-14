@@ -38,6 +38,21 @@ func main() {
 		return
 	}
 
+	// `--session-context` answers the SessionStart hook: the plugin's standing
+	// instruction (CORTEXDB_SESSION_DIRECTIVE) plus an index of the brain's
+	// most recent memories about the project the session starts in.
+	if len(os.Args) > 1 && os.Args[1] == "--session-context" {
+		runSessionContext()
+		return
+	}
+
+	// `--file-context` answers the PreToolUse hook on Read/Edit/Write with
+	// the brain's memories about that file, once per file per session.
+	if len(os.Args) > 1 && os.Args[1] == "--file-context" {
+		runFileContext()
+		return
+	}
+
 	// `--graph-html [out]` is a one-shot mode that renders the brain's knowledge
 	// graph to a self-contained, interactive HTML file and prints its path. Used
 	// by the /cortexdb-graph command to give the memory a viewable graph.

@@ -3,7 +3,8 @@
 #
 # Injects a short standing directive so the assistant uses the CortexDB brain
 # proactively (recall before answering, save durable facts) every session —
-# turning memory use from "if it remembers to" into default behavior.
+# turning memory use from "if it remembers to" into default behavior — and an
+# index of what the brain knows about the project the session starts in.
 #
 # Opt-in: it only injects when auto-recall is enabled (the same on/off switch
 # the UserPromptSubmit hook records), so it never adds noise on machines where
@@ -23,6 +24,16 @@ esac
 # No embedded double quotes in the directive, so no JSON escaping is needed;
 # \n stays literal (single-quoted) and the JSON parser turns it into newlines.
 directive='<important>You have persistent CortexDB memory through the available CortexDB MCP tools. Use the configured brain (CORTEXDB_REMOTE or CORTEXDB_PATH; default ~/.cortexdb/cortexdb.db) proactively.\n- Before answering from assumptions about past decisions, preferences or project background, call knowledge_memory_recall. Use only relevant returned evidence; unrelated hits do not establish an answer.\n- For relationships such as ownership and dependencies, call graph_schema then graph_cypher_query, expand_graph or SPARQL. A co_occurs edge only means two names appeared together, not ownership, usage or dependency.\n- Save durable preferences, decisions and facts through memory_save or knowledge_save with stable ids and concise content. Preserve corrections and their source.\n- If no relevant evidence is found, say so. If tools are unavailable, skip them.</important>'
+
+# With the MCP binary at hand, the directive goes out together with an index of
+# the brain's most recent memories about the project this session starts in
+# (cortexdb-mcp --session-context, which reads the hook payload's cwd). It is
+# never downloaded from here: until the MCP launcher has fetched it, the
+# directive goes out alone.
+bin="$("$(dirname "$0")/cortexdb-mcp-path" 2>/dev/null || true)"
+if [ -n "$bin" ]; then
+  CORTEXDB_SESSION_DIRECTIVE="$directive" exec "$bin" --session-context
+fi
 
 printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$directive"
 exit 0

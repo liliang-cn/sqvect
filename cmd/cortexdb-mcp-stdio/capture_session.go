@@ -128,6 +128,10 @@ func runCaptureSession(args []string) {
 			fmt.Printf("outdated %s (contradicted by %s): %s\n", req.MemoryID, plan.Outdated[f.Slug], clip(req.Content, 120))
 			continue
 		}
+		if dup := duplicateOf(ctx, brain, req); dup != "" {
+			fmt.Printf("already known as %s: %s\n", dup, clip(req.Content, 120))
+			continue
+		}
 		if dryRun {
 			fmt.Printf("would save %s (importance %.2f): %s\n", req.MemoryID, req.Importance, clip(req.Content, 160))
 			for _, id := range req.Supersedes {
@@ -158,9 +162,11 @@ func capturedRequest(sessionID, date string, f capturedFact) cortexdb.MemorySave
 	req := cortexdb.MemorySaveRequest{
 		// Stable per session+slug, so re-capturing a session overwrites its
 		// own memories instead of stacking duplicates.
-		MemoryID:   capturedIDPrefix(sessionID) + f.Slug,
-		Scope:      "global",
-		Content:    strings.TrimSpace(f.Content),
+		MemoryID: capturedIDPrefix(sessionID) + f.Slug,
+		Scope:    "global",
+		// The model saw a scrubbed transcript; this catches a credential it
+		// reconstructed or a fact carried in from somewhere else.
+		Content:    scrubForCapture(strings.TrimSpace(f.Content)),
 		Importance: clamp01(f.Importance),
 		Metadata: map[string]any{
 			"source":  "auto-capture",
@@ -205,12 +211,14 @@ func digestTranscript(path string) (string, int, error) {
 	defer f.Close()
 
 	var b strings.Builder
+	var files touchedFiles
 	userTurns := 0
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 4*1024*1024), 4*1024*1024)
 	for scanner.Scan() {
 		var entry struct {
 			Type    string `json:"type"`
+			Cwd     string `json:"cwd"`
 			Message struct {
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
@@ -228,7 +236,22 @@ func digestTranscript(path string) (string, int, error) {
 			userTurns++
 			fmt.Fprintf(&b, "USER: %s\n", clip(text, 2000))
 		case "assistant":
-			text := textFromContent(entry.Message.Content)
+			var blocks []struct {
+				Type  string `json:"type"`
+				Name  string `json:"name"`
+				Input struct {
+					FilePath     string `json:"file_path"`
+					NotebookPath string `json:"notebook_path"`
+				} `json:"input"`
+			}
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, blk := range blocks {
+					if blk.Type == "tool_use" {
+						files.add(blk.Name, firstNonEmptyStr(blk.Input.FilePath, blk.Input.NotebookPath), entry.Cwd)
+					}
+				}
+			}
+			text := scrubForCapture(textFromContent(entry.Message.Content))
 			if strings.TrimSpace(text) == "" {
 				continue
 			}
@@ -238,7 +261,9 @@ func digestTranscript(path string) (string, int, error) {
 	if err := scanner.Err(); err != nil {
 		return "", 0, err
 	}
-	return budgetDigest(b.String()), userTurns, nil
+	// The files go first, outside the trimmed body: they are what the model
+	// links each memory to, and a long session must not trim them away.
+	return files.section() + budgetDigest(b.String()), userTurns, nil
 }
 
 // budgetDigest keeps a digest within what one extraction call is given. Long
@@ -290,9 +315,10 @@ var transcriptNoisePattern = regexp.MustCompile(`(?s)<(?:system-reminder|local-c
 
 // stripTranscriptNoise removes injected machinery from a user turn — hook
 // context, slash-command wrappers, task notifications — leaving what the person
-// actually typed. A turn that was all machinery becomes empty and is dropped.
+// actually typed, scrubbed of <private> blocks and credentials (scrub.go). A
+// turn that was all machinery, or all private, becomes empty and is dropped.
 func stripTranscriptNoise(text string) string {
-	return strings.TrimSpace(transcriptNoisePattern.ReplaceAllString(text, ""))
+	return strings.TrimSpace(scrubForCapture(transcriptNoisePattern.ReplaceAllString(text, "")))
 }
 
 // capturedFact is one durable thing a session established.
@@ -319,6 +345,7 @@ Rules:
 - 0 to 8 memories. An uneventful session yields zero — that is a good answer.
 - slug: short kebab-case ascii. importance: 0.3 routine fact, 0.6 useful decision, 0.85+ hard-won lesson or standing preference.
 - entities: the concrete named things (projects, hosts, services, people) each memory is about.
+- When a memory is about specific files listed under FILES, add each of those files as an entity of type "file", named exactly as listed. Leave out files a memory is not about; a memory about none has no file entities.
 
 Respond with JSON only: {"memories":[{"slug":"...","content":"...","importance":0.6,"type":"fact|decision|preference|lesson","entities":[{"name":"...","type":"..."}]}]}`
 

@@ -163,7 +163,7 @@ func digestDshSession(path string) (digest string, userTurns int, sessionID stri
 			userTurns++
 			fmt.Fprintf(&b, "USER: %s\n", clip(text, 2000))
 		case "assistant/message":
-			text := strings.TrimSpace(textFromContent(event.Data.Message.Content))
+			text := strings.TrimSpace(scrubForCapture(textFromContent(event.Data.Message.Content)))
 			if text == "" {
 				continue
 			}

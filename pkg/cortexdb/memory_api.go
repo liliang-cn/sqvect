@@ -183,6 +183,24 @@ func (db *DB) UpdateMemory(ctx context.Context, req MemoryUpdateRequest) (*Memor
 
 // GetMemory fetches a memory record by ID.
 func (db *DB) GetMemory(ctx context.Context, req MemoryGetRequest) (*MemoryGetResponse, error) {
+	if len(req.MemoryIDs) > 0 {
+		resp := &MemoryGetResponse{}
+		for _, id := range req.MemoryIDs {
+			row, err := db.loadMemoryRow(ctx, id)
+			if errors.Is(err, core.ErrNotFound) {
+				resp.Missing = append(resp.Missing, id)
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			resp.Memories = append(resp.Memories, row.record)
+		}
+		if len(resp.Memories) > 0 {
+			resp.Memory = resp.Memories[0]
+		}
+		return resp, nil
+	}
 	row, err := db.loadMemoryRow(ctx, req.MemoryID)
 	if err != nil {
 		return nil, err

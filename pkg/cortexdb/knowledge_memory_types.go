@@ -206,11 +206,17 @@ type MemoryUpdateRequest struct {
 // MemoryGetRequest fetches a memory by ID.
 type MemoryGetRequest struct {
 	MemoryID string `json:"memory_id"`
+	// MemoryIDs fetches several at once, in the order given: the second step
+	// after a recall with detail "index". An id that does not exist is listed
+	// in Missing rather than failing the call.
+	MemoryIDs []string `json:"memory_ids,omitempty"`
 }
 
 // MemoryGetResponse returns one memory.
 type MemoryGetResponse struct {
-	Memory MemoryRecord `json:"memory"`
+	Memory   MemoryRecord   `json:"memory"`
+	Memories []MemoryRecord `json:"memories,omitempty"`
+	Missing  []string       `json:"missing,omitempty"`
 }
 
 // MemoryDeleteRequest deletes a memory by ID.

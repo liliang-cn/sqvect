@@ -1,0 +1,17 @@
+#!/bin/sh
+# CortexDB PreToolUse hook for Read, Edit and Write.
+#
+# Before the agent opens a file, hands it what the brain remembers about that
+# file: the memories a capture linked to it, newest first, once per file per
+# session (cortexdb-mcp --file-context). A file the brain knows nothing about
+# adds nothing. Follows the same on/off switch as auto-recall, and never blocks
+# or delays the tool beyond its own timeout.
+set -eu
+cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/cortexdb"
+case "$(cat "${cache_root}/autorecall" 2>/dev/null || true)" in
+  on*) : ;;
+  *)   exit 0 ;;
+esac
+bin="$("$(dirname "$0")/cortexdb-mcp-path" 2>/dev/null || true)"
+[ -n "$bin" ] || exit 0
+exec "$bin" --file-context
