@@ -707,6 +707,12 @@ func hasSHACLDatatype(term RDFTerm, datatype string) bool {
 		return xsdIntegerLexical.MatchString(lex) && (!strings.HasPrefix(lex, "-") || strings.Trim(lex, "-0") == "")
 	case "positiveInteger":
 		return xsdIntegerLexical.MatchString(lex) && !strings.HasPrefix(lex, "-") && strings.Trim(lex, "+0") != ""
+	case "negativeInteger", "nonPositiveInteger":
+		if !xsdIntegerLexical.MatchString(lex) {
+			return false
+		}
+		n, ok := new(big.Int).SetString(strings.TrimPrefix(lex, "+"), 10)
+		return ok && (n.Sign() < 0 || local == "nonPositiveInteger" && n.Sign() == 0)
 	case "decimal":
 		return xsdDecimalLexical.MatchString(lex)
 	case "double", "float":
