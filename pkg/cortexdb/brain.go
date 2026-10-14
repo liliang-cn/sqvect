@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/liliang-cn/cortexdb/v2/pkg/graph"
@@ -722,13 +723,25 @@ func compactTitle(text string) string {
 	return title
 }
 
+// clipString cuts text to at most max bytes — the context pack's budget is in
+// bytes — but never inside a character: the cut steps back to the start of
+// the character it would have split, so CJK text does not end in U+FFFD.
 func clipString(text string, max int) string {
 	text = strings.TrimSpace(text)
 	if max <= 0 || len(text) <= max {
 		return text
 	}
 	if max <= 3 {
-		return text[:max]
+		return text[:runeBoundary(text, max)]
 	}
-	return strings.TrimSpace(text[:max-3]) + "..."
+	return strings.TrimSpace(text[:runeBoundary(text, max-3)]) + "..."
+}
+
+// runeBoundary is the largest i <= n at which text can be cut without
+// splitting a UTF-8 sequence.
+func runeBoundary(text string, n int) int {
+	for n > 0 && n < len(text) && !utf8.RuneStart(text[n]) {
+		n--
+	}
+	return n
 }

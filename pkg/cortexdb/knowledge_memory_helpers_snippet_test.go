@@ -22,3 +22,19 @@ func TestCompactSnippetCutsOnACharacterBoundary(t *testing.T) {
 		t.Fatalf("short content: %q", compactSnippet(short))
 	}
 }
+
+func TestClipStringNeverSplitsACharacter(t *testing.T) {
+	text := strings.Repeat("实验机见 drbd-lab-vms，", 40)
+	for max := 1; max < 200; max++ {
+		got := clipString(text, max)
+		if !utf8.ValidString(got) {
+			t.Fatalf("max %d: not valid UTF-8: %q", max, got)
+		}
+		if len(got) > max {
+			t.Fatalf("max %d: %d bytes", max, len(got))
+		}
+	}
+	if got := clipString("short", 100); got != "short" {
+		t.Fatalf("short text: %q", got)
+	}
+}
