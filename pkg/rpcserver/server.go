@@ -13,6 +13,7 @@ import (
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/authz"
 	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
+	"github.com/liliang-cn/cortexdb/v2/pkg/rpc"
 	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 )
 
@@ -59,7 +60,7 @@ type Options struct {
 func New(db *cortexdb.DB, opts Options) *grpc.Server {
 	s, err := NewWithPolicy(db, opts)
 	if err != nil {
-		return grpc.NewServer(grpc.UnaryInterceptor(refuseAllInterceptor(err)))
+		return grpc.NewServer(append(rpc.ServerOptions(), grpc.UnaryInterceptor(refuseAllInterceptor(err)))...)
 	}
 	return s
 }
@@ -75,7 +76,7 @@ func NewWithPolicy(db *cortexdb.DB, opts Options) (*grpc.Server, error) {
 		}
 	}
 	chain := append(append([]grpc.UnaryServerInterceptor{}, opts.Interceptors...), authInterceptor(keys, db))
-	s := grpc.NewServer(grpc.ChainUnaryInterceptor(chain...))
+	s := grpc.NewServer(append(rpc.ServerOptions(), grpc.ChainUnaryInterceptor(chain...))...)
 	Register(s, db, opts)
 	return s, nil
 }

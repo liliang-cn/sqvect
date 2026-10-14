@@ -121,7 +121,7 @@ func dialCortexDB(addr, token string) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	opts := append(rpc.DialOptions(), grpc.WithTransportCredentials(creds))
 	if token != "" {
 		opts = append(opts, grpc.WithUnaryInterceptor(bearerInterceptor(token)))
 	}

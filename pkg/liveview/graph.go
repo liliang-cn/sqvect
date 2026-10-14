@@ -45,7 +45,7 @@ func dial(addr, token string) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	opts := append(rpc.DialOptions(), grpc.WithTransportCredentials(creds))
 	if token != "" {
 		opts = append(opts, grpc.WithUnaryInterceptor(
 			func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn,

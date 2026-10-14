@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- A client of a shared brain no longer fails a call with `connection reset
+  by peer` when the connection it held was lost while idle — the brain
+  failed over, or the connection was dropped on the way. The remote MCP
+  server and liveview ping an idle connection every 30 s, so a dead one is
+  replaced before a call needs it, and retry a call that fails as
+  UNAVAILABLE once on a fresh connection; the server never returns that code
+  itself. The gRPC server accepts those pings (one per 20 s, with or without
+  a call in flight); an older server hangs up on them, so upgrade the
+  server first.
+
 ## [2.129.0] - 2026-10-14
 
 ### Changed
