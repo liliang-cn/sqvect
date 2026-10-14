@@ -172,7 +172,11 @@ func NewBM25EncoderWithParams(k1, b float64) *BM25Encoder {
 func (e *BM25Encoder) Fit(ctx context.Context, documents []string) error {
 	e.idfMu.Lock()
 	defer e.idfMu.Unlock()
+	e.vocabMu.Lock()
+	defer e.vocabMu.Unlock()
 
+	e.idf = make(map[string]float64)
+	e.vocabulary = nil
 	e.totalDocs = len(documents)
 	e.docFreq = make(map[string]int)
 	termDocCount := make(map[string]map[int]bool) // term -> set of doc indices
@@ -194,7 +198,6 @@ func (e *BM25Encoder) Fit(ctx context.Context, documents []string) error {
 			}
 
 			// Add to vocabulary
-			e.vocabMu.Lock()
 			found := false
 			for _, v := range e.vocabulary {
 				if v == term {
@@ -205,7 +208,6 @@ func (e *BM25Encoder) Fit(ctx context.Context, documents []string) error {
 			if !found {
 				e.vocabulary = append(e.vocabulary, term)
 			}
-			e.vocabMu.Unlock()
 		}
 	}
 
@@ -327,7 +329,11 @@ func NewTFIDFEncoderWithSublinearTF() *TFIDFEncoder {
 func (e *TFIDFEncoder) Fit(ctx context.Context, documents []string) error {
 	e.idfMu.Lock()
 	defer e.idfMu.Unlock()
+	e.vocabMu.Lock()
+	defer e.vocabMu.Unlock()
 
+	e.idf = make(map[string]float64)
+	e.vocabulary = nil
 	e.totalDocs = len(documents)
 	e.docFreq = make(map[string]int)
 	termDocCount := make(map[string]map[int]bool)
@@ -346,7 +352,6 @@ func (e *TFIDFEncoder) Fit(ctx context.Context, documents []string) error {
 			}
 
 			// Add to vocabulary
-			e.vocabMu.Lock()
 			found := false
 			for _, v := range e.vocabulary {
 				if v == term {
@@ -357,7 +362,6 @@ func (e *TFIDFEncoder) Fit(ctx context.Context, documents []string) error {
 			if !found {
 				e.vocabulary = append(e.vocabulary, term)
 			}
-			e.vocabMu.Unlock()
 		}
 	}
 
