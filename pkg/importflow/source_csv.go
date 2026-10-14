@@ -47,15 +47,31 @@ func NewCSVSource(r io.Reader, opts CSVOptions) (*CSVSource, error) {
 		return nil, fmt.Errorf("empty csv: no header row")
 	}
 	header := raw[0]
+	// Two columns under one name would share a map key and one would vanish,
+	// so a duplicate is an error. An empty name is not: a trailing comma on
+	// the header line is common in exported CSVs, and the column it makes is
+	// kept as column_<n> (1-based). The named columns are collected first so
+	// a generated name cannot shadow a real one.
 	cols := make([]Column, len(header))
 	seen := make(map[string]bool, len(header))
 	for i, h := range header {
 		name := strings.TrimSpace(h)
 		if name == "" {
-			return nil, fmt.Errorf("csv header column %d is empty", i+1)
+			continue
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("duplicate csv header column %q", name)
+		}
+		seen[name] = true
+		cols[i] = Column{Name: name}
+	}
+	for i := range cols {
+		if cols[i].Name != "" {
+			continue
+		}
+		name := fmt.Sprintf("column_%d", i+1)
+		if seen[name] {
+			return nil, fmt.Errorf("csv header column %d is empty and its default name %q is taken", i+1, name)
 		}
 		seen[name] = true
 		cols[i] = Column{Name: name}
