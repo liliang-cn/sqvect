@@ -121,6 +121,9 @@ func (fr *FunctionRouter) Add(route *RouteWithFunction) error {
 	if route == nil {
 		return fmt.Errorf("route cannot be nil")
 	}
+	if route.Route == nil || route.Name == "" {
+		return fmt.Errorf("route name cannot be empty")
+	}
 	if route.FunctionSchema == nil {
 		return fmt.Errorf("function schema cannot be nil")
 	}
@@ -131,7 +134,7 @@ func (fr *FunctionRouter) Add(route *RouteWithFunction) error {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 
-	fr.routes[route.FunctionSchema.Name] = route
+	fr.routes[route.Name] = route
 	return nil
 }
 
