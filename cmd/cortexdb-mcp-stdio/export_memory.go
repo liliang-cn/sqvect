@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -195,7 +196,8 @@ func yamlInline(s string) string {
 		return `""`
 	}
 	if strings.ContainsAny(s, ":#\"'{}[],&*?|<>=!%@`") || strings.HasPrefix(s, "-") {
-		return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
+		encoded, _ := json.Marshal(s)
+		return string(encoded)
 	}
 	return s
 }
