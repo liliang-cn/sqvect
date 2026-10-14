@@ -106,7 +106,7 @@ func (db *DB) RangeSearchText(ctx context.Context, query string, opts VectorRang
 
 	vector, err := db.embedder.Embed(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		return nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 	return db.RangeSearchVector(ctx, vector, opts)
 }

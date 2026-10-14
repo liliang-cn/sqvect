@@ -71,7 +71,7 @@ func (q *Quick) AddTextToCollection(ctx context.Context, collection string, text
 
 	vec, err := q.db.embedder.Embed(ctx, text)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		return "", fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
 	embedding := &core.Embedding{
