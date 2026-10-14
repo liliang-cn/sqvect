@@ -128,11 +128,11 @@ func (q *Quick) AddBatchWithVectors(ctx context.Context, vectors [][]float32, co
 
 // AddBatchWithVectorsToCollection adds multiple vectors to a specific collection with automatic ID generation.
 func (q *Quick) AddBatchWithVectorsToCollection(ctx context.Context, collection string, vectors [][]float32, contents []string, metadata map[string]string) ([]string, error) {
-	if len(vectors) == 0 || len(contents) == 0 {
-		return nil, nil
-	}
 	if len(vectors) != len(contents) {
 		return nil, fmt.Errorf("vector count (%d) must match content count (%d)", len(vectors), len(contents))
+	}
+	if len(vectors) == 0 {
+		return nil, nil
 	}
 
 	ids := make([]string, len(vectors))
