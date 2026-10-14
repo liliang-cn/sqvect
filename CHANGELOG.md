@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.129.2] - 2026-10-14
+
+### Fixed
+
+- The cortexdb-live mod did not load on Claude Code 2.1.299, which refuses
+  an optional call on `$` (`$.session.root?.()`) as reading the event as a
+  value, so recall and capture were off in every session. It calls
+  `$.session.root()` directly and keeps absolute paths where the call fails.
+
 ## [2.129.1] - 2026-10-14
 
 ### Fixed
