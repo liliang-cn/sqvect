@@ -215,6 +215,10 @@ func (r *RegexExtractor) RegisterPattern(functionName, paramName, pattern string
 func (r *RegexExtractor) Extract(ctx context.Context, text string, schema *FunctionSchema) (map[string]interface{}, []string, error) {
 	params := make(map[string]interface{})
 	var missing []string
+	required := make(map[string]bool, len(schema.Required))
+	for _, name := range schema.Required {
+		required[name] = true
+	}
 
 	textLower := strings.ToLower(text)
 
@@ -238,7 +242,7 @@ func (r *RegexExtractor) Extract(ctx context.Context, text string, schema *Funct
 		value := r.extractValue(text, textLower, paramName, paramSchema)
 		if value != nil {
 			params[paramName] = value
-		} else if paramSchema.Required {
+		} else if paramSchema.Required || required[paramName] {
 			missing = append(missing, paramName)
 		}
 	}
