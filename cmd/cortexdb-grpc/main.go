@@ -68,13 +68,19 @@ func main() {
 		dbPath = flag.String("db", envOr("CORTEXDB_PATH", cortexdb.DefaultDBPath()), "SQLite database path")
 		_      = flag.Bool("version", false, "print the version of this binary and exit")
 		addr   = flag.String("addr", envOr("CORTEXDB_GRPC_ADDR", "127.0.0.1:47821"), "listen address")
-		token  = flag.String("token", os.Getenv("CORTEXDB_GRPC_TOKEN"), "bearer token (empty disables auth)")
+		token  = flag.String("token", "", "bearer token; defaults to $CORTEXDB_GRPC_TOKEN, and -token \"\" disables auth")
 		health = flag.Bool("health", false, "probe a server already running at -addr, print its status and exit")
 		keys   = flag.String("keys", envOr("CORTEXDB_KEY_FILE", ""), "JSON file of scoped API keys; when set it is the whole policy and -token is ignored")
 		backup = flag.String("backup-dir", envOr("CORTEXDB_BACKUP_DIR", ""), "directory AdminService.Backup may write into (default: the directory holding the database)")
 		httpAd = flag.String("http-addr", envOr("CORTEXDB_HTTP_ADDR", ""), "also serve REST + /metrics + /debug/vars here; empty disables it")
 	)
 	flag.Parse()
+	// The token is read from the environment after parsing, not given to the
+	// flag as its default: flag prints defaults in -h, and a help screen is
+	// no place for a credential.
+	if !flagGiven("token") {
+		*token = os.Getenv("CORTEXDB_GRPC_TOKEN")
+	}
 
 	// The probe opens no database: it is meant to run beside a live server as a
 	// container HEALTHCHECK or a systemd health command, where a second process
@@ -202,4 +208,15 @@ func startHTTP(addr string, db *cortexdb.DB, metrics *observability.Registry, to
 			log.Fatalf("http serve: %v", err)
 		}
 	}()
+}
+
+// flagGiven reports whether a flag was set on the command line.
+func flagGiven(name string) bool {
+	given := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+	return given
 }
