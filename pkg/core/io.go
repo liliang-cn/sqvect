@@ -165,7 +165,6 @@ func (s *SQLiteStore) dumpCSV(ctx context.Context, w io.Writer, opts DumpOptions
 	stats.TotalEmbeddings = len(embeddings)
 
 	writer := csv.NewWriter(w)
-	defer writer.Flush()
 
 	// Write header
 	headers := []string{"id", "content", "doc_id", "metadata"}
@@ -192,6 +191,10 @@ func (s *SQLiteStore) dumpCSV(ctx context.Context, w io.Writer, opts DumpOptions
 		if err := writer.Write(row); err != nil {
 			return stats, err
 		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return stats, wrapError("dump_csv", fmt.Errorf("failed to flush CSV: %w", err))
 	}
 
 	return stats, nil
