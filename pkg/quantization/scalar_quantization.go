@@ -375,12 +375,20 @@ func (bq *BinaryQuantizer) SearchBinary(query []byte, database [][]byte, topK in
 		dist int
 	}
 
-	results := make([]result, len(database))
+	if topK <= 0 {
+		return []int{}, []int{}
+	}
+
+	results := make([]result, 0, len(database))
 	for i, vec := range database {
-		results[i] = result{
-			idx:  i,
-			dist: bq.HammingDistance(query, vec),
+		dist := bq.HammingDistance(query, vec)
+		if dist < 0 {
+			// A code of a different length cannot be compared with the
+			// query; HammingDistance reports it as -1, which would
+			// otherwise sort ahead of every real match.
+			continue
 		}
+		results = append(results, result{idx: i, dist: dist})
 	}
 
 	// Sort by Hamming distance
