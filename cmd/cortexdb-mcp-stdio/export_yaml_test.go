@@ -13,6 +13,7 @@ func TestYAMLInlineQuotedStringsPreserveBackslashes(t *testing.T) {
 		`C:\work\backup #1`,
 		`a"b#c`,
 		`α # π`,
+		`a <b> & c`,
 	} {
 		t.Run(input, func(t *testing.T) {
 			encoded := yamlInline(input)
@@ -24,6 +25,12 @@ func TestYAMLInlineQuotedStringsPreserveBackslashes(t *testing.T) {
 				t.Fatalf("roundtrip = %q, want %q", decoded, input)
 			}
 		})
+	}
+}
+
+func TestYAMLInlineLeavesHTMLCharactersReadable(t *testing.T) {
+	if got, want := yamlInline(`see <docs> & notes`), `"see <docs> & notes"`; got != want {
+		t.Fatalf("yamlInline = %s, want %s", got, want)
 	}
 }
 

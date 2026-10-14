@@ -196,8 +196,14 @@ func yamlInline(s string) string {
 		return `""`
 	}
 	if strings.ContainsAny(s, ":#\"'{}[],&*?|<>=!%@`") || strings.HasPrefix(s, "-") {
-		encoded, _ := json.Marshal(s)
-		return string(encoded)
+		// A JSON string is a valid YAML double-quoted scalar. HTML escaping
+		// is off: the frontmatter is read by people, and "<" written as
+		// "\u003c" is correct YAML that nobody can read.
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		_ = enc.Encode(s)
+		return strings.TrimSuffix(b.String(), "\n")
 	}
 	return s
 }
