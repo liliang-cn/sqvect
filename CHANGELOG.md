@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.128.0] - 2026-10-14
+
 ### Added
 
 - A shared brain can be reached over TLS: `CORTEXDB_REMOTE=https://host[:port]`
