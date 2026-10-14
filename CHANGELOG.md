@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.127.0] - 2026-10-14
+
 ### Added
 
 - An Obsidian plugin (`plugins/obsidian-cortexdb`, released as
