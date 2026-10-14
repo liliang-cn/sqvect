@@ -60,11 +60,14 @@ export function decodeFields(buf) {
     } else if (wire === 2) {
       let len;
       [len, pos] = readVarint(buf, pos);
+      if (len > BigInt(buf.length - pos)) throw new Error("truncated protobuf length-delimited field");
       out[number] = buf.subarray(pos, pos + Number(len));
       pos += Number(len);
     } else if (wire === 1) {
+      if (pos + 8 > buf.length) throw new Error("truncated protobuf fixed64 field");
       pos += 8;
     } else if (wire === 5) {
+      if (pos + 4 > buf.length) throw new Error("truncated protobuf fixed32 field");
       pos += 4;
     } else {
       throw new Error(`unsupported protobuf wire type ${wire}`);
@@ -88,7 +91,9 @@ function unframe(body) {
   if (body.length === 0) return Buffer.alloc(0);
   if (body.length < 5) throw new Error("truncated gRPC frame");
   if (body[0] !== 0) throw new Error("compressed gRPC responses are not supported");
-  return body.subarray(5, 5 + body.readUInt32BE(1));
+  const size = body.readUInt32BE(1);
+  if (body.length < 5 + size) throw new Error("truncated gRPC frame payload");
+  return body.subarray(5, 5 + size);
 }
 
 export class GrpcError extends Error {
