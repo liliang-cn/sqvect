@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.129.0] - 2026-10-14
+
 ### Changed
 
 - A memory recall is several times faster, and stays fast under a burst.
