@@ -3,6 +3,7 @@ package semanticrouter
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 // MockEmbedder is a simple embedder for testing purposes.
@@ -60,6 +61,7 @@ func (m *MockEmbedder) Dimensions() int {
 type CachedEmbedder struct {
 	embedder Embedder
 	cache    map[string][]float32
+	mu       sync.RWMutex
 }
 
 // NewCachedEmbedder creates a new cached embedder.
@@ -72,16 +74,21 @@ func NewCachedEmbedder(embedder Embedder) *CachedEmbedder {
 
 // Embed returns a cached embedding if available, otherwise computes and caches it.
 func (c *CachedEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	c.mu.RLock()
 	if vec, ok := c.cache[text]; ok {
+		c.mu.RUnlock()
 		return vec, nil
 	}
+	c.mu.RUnlock()
 
 	vec, err := c.embedder.Embed(ctx, text)
 	if err != nil {
 		return nil, err
 	}
 
+	c.mu.Lock()
 	c.cache[text] = vec
+	c.mu.Unlock()
 	return vec, nil
 }
 
@@ -91,6 +98,7 @@ func (c *CachedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 	uncached := make(map[int]string) // index -> text
 
 	// Check cache first
+	c.mu.RLock()
 	for i, text := range texts {
 		if vec, ok := c.cache[text]; ok {
 			vectors[i] = vec
@@ -98,6 +106,7 @@ func (c *CachedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 			uncached[i] = text
 		}
 	}
+	c.mu.RUnlock()
 
 	// Embed uncached texts
 	if len(uncached) > 0 {
@@ -117,16 +126,20 @@ func (c *CachedEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]fl
 					return nil, fmt.Errorf("failed to embed %q: %w", text, err)
 				}
 				vectors[origIdx] = vec
+				c.mu.Lock()
 				c.cache[text] = vec
+				c.mu.Unlock()
 			}
 			return vectors, nil
 		}
 
+		c.mu.Lock()
 		for batchIdx, vec := range batchVecs {
 			origIdx := indexMap[batchIdx]
 			vectors[origIdx] = vec
 			c.cache[uncachedTexts[batchIdx]] = vec
 		}
+		c.mu.Unlock()
 	}
 
 	return vectors, nil
@@ -139,10 +152,14 @@ func (c *CachedEmbedder) Dimensions() int {
 
 // ClearCache clears the embedding cache.
 func (c *CachedEmbedder) ClearCache() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.cache = make(map[string][]float32)
 }
 
 // CacheSize returns the number of cached embeddings.
 func (c *CachedEmbedder) CacheSize() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return len(c.cache)
 }
