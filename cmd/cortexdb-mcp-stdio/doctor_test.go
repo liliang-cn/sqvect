@@ -17,6 +17,11 @@ func doctorEnv(t *testing.T) string {
 	t.Helper()
 	t.Setenv("CORTEXDB_REMOTE", "")
 	t.Setenv("CORTEXDB_GRPC_TOKEN", "")
+	// A Claude Code session running the cortexdb-live mod sets these, and the
+	// shell hooks stand down for it: a test run from such a session would see
+	// the hooks say nothing and fail for a reason that is not in the code.
+	t.Setenv("CORTEXDB_RECALL_BY_MOD", "")
+	t.Setenv("CORTEXDB_CAPTURE_BY_MOD", "")
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	path := filepath.Join(t.TempDir(), "brain.db")
 	t.Setenv("CORTEXDB_PATH", path)
