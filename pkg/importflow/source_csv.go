@@ -30,7 +30,7 @@ func NewCSVSource(r io.Reader, opts CSVOptions) (*CSVSource, error) {
 	if opts.Delimiter == 0 {
 		opts.Delimiter = ','
 	}
-	if opts.SampleSize == 0 {
+	if opts.SampleSize <= 0 {
 		opts.SampleSize = 5
 	}
 	if opts.Table == "" {
