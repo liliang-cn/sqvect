@@ -320,12 +320,17 @@ func (r *Router) getRouteVectors(ctx context.Context, route *Route) ([][]float32
 		return r.embedVectors(ctx, route.Utterances)
 	}
 
-	var err error
-	route.cachedOnce.Do(func() {
-		route.cachedVectors, err = r.embedVectors(ctx, route.Utterances)
-	})
-
-	return route.cachedVectors, err
+	route.cachedMu.Lock()
+	defer route.cachedMu.Unlock()
+	if route.cachedVectors != nil {
+		return route.cachedVectors, nil
+	}
+	vectors, err := r.embedVectors(ctx, route.Utterances)
+	if err != nil {
+		return nil, err
+	}
+	route.cachedVectors = vectors
+	return vectors, nil
 }
 
 // embedVectors converts text utterances to embeddings.
