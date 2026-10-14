@@ -76,7 +76,7 @@ export function hitsOf(payload, { knowledge: skipKnowledge = "", memory: skipMem
       id: hit.knowledge_id,
       title: String(hit.title ?? "").trim() || hit.knowledge_id,
       text: String(hit.snippet ?? "").trim(),
-      more: String(hit.snippet ?? "").trim(),
+      more: withoutTitle(hit.snippet, hit.title),
       source: String(hit.source_url ?? ""),
       score: Number(hit?.score ?? 0),
     });
@@ -107,6 +107,24 @@ export function firstLine(text) {
     if (t) return [...t].length > 120 ? `${[...t].slice(0, 120).join("").trim()}…` : t;
   }
   return "";
+}
+
+// withoutTitle is a knowledge snippet without the document's own heading at
+// its start: a Markdown document usually opens with "# <title>", and the
+// panel shows the title already.
+export function withoutTitle(snippet, title) {
+  let s = String(snippet ?? "").trim().replace(/^#{1,6}\s+/, "");
+  const t = String(title ?? "").trim();
+  const squash = (x) => x.replace(/\s+/g, "");
+  if (t) {
+    // Compare without spaces: "SDS与HA" and "SDS 与 HA" are one title.
+    const want = squash(t);
+    let i = 0;
+    let taken = "";
+    while (i < s.length && squash(taken).length < want.length) taken += s[i++];
+    if (squash(taken) === want) s = s.slice(i);
+  }
+  return s.trim();
 }
 
 // afterFirstLine is what a memory says beyond the line used as its title.

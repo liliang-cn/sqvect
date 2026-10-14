@@ -1,6 +1,6 @@
 // The side panel: what the brain knows about the open note.
 
-import { ItemView, MarkdownRenderer, MarkdownView, Notice, setIcon } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, MarkdownView, Modal, Notice, setIcon } from "obsidian";
 import { entitiesOf, hitsOf, noteQuestion, recallArgs } from "./note.js";
 import { knowledgeIdOf } from "./vault_index.js";
 
@@ -114,27 +114,20 @@ export class CortexView extends ItemView {
       head.createSpan({ text: hit.kind === "memory" ? "Memory" : "Knowledge", cls: "cortexdb-badge" });
       if (hit.superseded) head.createSpan({ text: "superseded", cls: "cortexdb-badge cortexdb-old" });
       if (hit.date) head.createSpan({ text: hit.date, cls: "cortexdb-date" });
-      card.createDiv({ text: hit.title, cls: "cortexdb-hit-title" });
+      const title = card.createDiv({ text: hit.title, cls: "cortexdb-hit-title", attr: { "aria-label": "Read in full" } });
+      title.addEventListener("click", () => new FullModal(this, hit).open());
+      // The card shows text as it came; a click unclamps it. Markdown is
+      // rendered only in the full view: a snippet is cut and flattened, and
+      // one "#" at its start would turn the whole of it into a heading.
       if (hit.more) {
-        const body = card.createDiv({ cls: "cortexdb-hit-body is-clamped" });
-        body.setText(hit.more);
-        let rendered = false;
-        body.addEventListener("click", async () => {
-          if (!rendered) {
-            rendered = true;
-            body.empty();
-            await MarkdownRenderer.render(this.app, hit.more, body, this.file?.path ?? "", this);
-          }
-          body.toggleClass("is-clamped", !body.hasClass("is-clamped"));
-        });
+        const body = card.createDiv({ cls: "cortexdb-hit-body is-clamped", text: hit.more });
+        body.addEventListener("click", () => body.toggleClass("is-clamped", !body.hasClass("is-clamped")));
       }
 
       const actions = card.createDiv({ cls: "cortexdb-actions" });
+      this.action(actions, "maximize-2", "Read in full", () => new FullModal(this, hit).open());
       this.action(actions, "text-cursor-input", "Insert into the note", () => this.insert(hit));
-      this.action(actions, "copy", "Copy", async () => {
-        await navigator.clipboard.writeText(hit.text);
-        new Notice("Copied");
-      });
+      this.action(actions, "copy", "Copy", () => this.copy(hit));
       const note = this.plugin.noteFor(hit);
       if (note) this.action(actions, "file-text", "Open the note", () => this.app.workspace.getLeaf(false).openFile(note));
       actions.createSpan({ text: hit.id, cls: "cortexdb-id" });
@@ -147,16 +140,93 @@ export class CortexView extends ItemView {
     button.addEventListener("click", onClick);
   }
 
+  // fullText is all of a hit: recall carries a memory whole, but only a
+  // snippet of a knowledge document, which is read in full on first use.
+  async fullText(hit) {
+    if (hit.kind !== "knowledge") return hit.text;
+    if (hit.full === undefined) {
+      const answer = await this.plugin.brain().call("knowledge_get", { knowledge_id: hit.id });
+      hit.full = String(answer?.knowledge?.content ?? "").trim() || hit.text;
+    }
+    return hit.full;
+  }
+
+  async copy(hit) {
+    try {
+      await navigator.clipboard.writeText(await this.fullText(hit));
+      new Notice("Copied");
+    } catch (error) {
+      new Notice(`CortexDB: ${error.message}`);
+    }
+  }
+
   // insert puts a hit into the note being edited, as a callout that says
   // where it came from.
-  insert(hit) {
+  async insert(hit) {
     const view = this.app.workspace.getMostRecentLeaf()?.view;
     const editor = this.app.workspace.activeEditor?.editor ?? (view instanceof MarkdownView ? view.editor : null);
     if (!editor) {
       new Notice("Open a note in editing mode to insert into it.");
       return;
     }
-    const quoted = hit.text.split("\n").map((line) => `> ${line}`).join("\n");
+    let text;
+    try {
+      text = await this.fullText(hit);
+    } catch (error) {
+      new Notice(`CortexDB: ${error.message}`);
+      return;
+    }
+    const quoted = text.split("\n").map((line) => `> ${line}`).join("\n");
     editor.replaceSelection(`> [!quote] CortexDB ${hit.kind} \`${hit.id}\`\n${quoted}\n`);
+  }
+}
+
+// FullModal shows one hit whole, rendered as Markdown.
+class FullModal extends Modal {
+  constructor(view, hit) {
+    super(view.app);
+    this.view = view;
+    this.hit = hit;
+    this.component = new Component();
+  }
+
+  async onOpen() {
+    const { hit, view } = this;
+    this.component.load();
+    this.modalEl.addClass("cortexdb-full-modal");
+    this.setTitle(hit.title);
+    const meta = this.contentEl.createDiv({ cls: "cortexdb-hit-head" });
+    meta.createSpan({ text: hit.kind === "memory" ? "Memory" : "Knowledge", cls: `cortexdb-badge cortexdb-badge-${hit.kind}` });
+    if (hit.superseded) meta.createSpan({ text: "superseded", cls: "cortexdb-badge cortexdb-old" });
+    if (hit.date) meta.createSpan({ text: hit.date, cls: "cortexdb-date" });
+    meta.createSpan({ text: hit.id, cls: "cortexdb-id" });
+
+    const body = this.contentEl.createDiv({ cls: "cortexdb-full markdown-rendered", text: "Reading…" });
+    try {
+      const text = await view.fullText(hit);
+      body.empty();
+      await MarkdownRenderer.render(this.app, text, body, view.file?.path ?? "", this.component);
+    } catch (error) {
+      body.setText(`Cannot read it: ${error.message}`);
+    }
+
+    const actions = this.contentEl.createDiv({ cls: "cortexdb-actions" });
+    view.action(actions, "text-cursor-input", "Insert into the note", async () => {
+      await view.insert(hit);
+      this.close();
+    });
+    view.action(actions, "copy", "Copy", () => view.copy(hit));
+    const note = view.plugin.noteFor(hit);
+    if (note) {
+      view.action(actions, "file-text", "Open the note", () => {
+        this.close();
+        this.app.workspace.getLeaf(false).openFile(note);
+      });
+    }
+  }
+
+  onClose() {
+    this.component.unload();
+    this.contentEl.empty();
   }
 }

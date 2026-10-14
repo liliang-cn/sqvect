@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { entitiesOf, hitsOf, noteQuestion, proseOf, recallArgs } from "../src/note.js";
+import { entitiesOf, hitsOf, noteQuestion, proseOf, recallArgs, withoutTitle } from "../src/note.js";
 
 test("a note's prose leaves out frontmatter, code, comments and link markup", () => {
   const text = [
@@ -57,4 +57,11 @@ test("a note never comes back as an answer about itself", () => {
 test("entities come from graph facts, each once", () => {
   const names = entitiesOf({ graph_facts: [{ subject: "A", object: "B" }, { subject: "a", object: "C" }] });
   assert.deepEqual(names, ["A", "B", "C"]);
+});
+
+test("a knowledge snippet does not repeat the title the card already shows", () => {
+  assert.equal(withoutTitle("# SDS 与 HA 市场调研 配合现代化控制面 LINSTOR", "SDS与HA市场调研"), "配合现代化控制面 LINSTOR");
+  assert.equal(withoutTitle("## Setup Install Python with uv", "Setup"), "Install Python with uv");
+  assert.equal(withoutTitle("# Other heading then text", "Setup"), "Other heading then text");
+  assert.equal(withoutTitle("plain text", ""), "plain text");
 });
