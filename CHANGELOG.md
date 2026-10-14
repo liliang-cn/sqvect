@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.129.1] - 2026-10-14
+
 ### Fixed
 
 - A client of a shared brain no longer fails a call with `connection reset
