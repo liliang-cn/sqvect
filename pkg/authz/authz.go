@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -203,6 +204,10 @@ func Parse(data []byte) (*KeySet, error) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("parse key file: %w", err)
+	}
+	// A key file is one JSON document, not a stream of concatenated values.
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("parse key file: unexpected trailing data")
 	}
 	if len(f.Keys) == 0 {
 		return nil, errors.New("parse key file: no keys declared")
