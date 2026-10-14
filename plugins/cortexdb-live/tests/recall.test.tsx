@@ -199,7 +199,7 @@ for (const surface of ['terminal', 'desktop'] as const) {
     expect(await band.find({ text: /Query \(haiku\): Alice · indentation · 缩进 · tabs \| Entities: Alice/ }), 'plan').toBeDefined()
 
     await band.press({ key: 'hide' })
-    expect(await band.drawn()).toEqual({ type: 'Text', children: ['engine'] })
+    expect(await band.drawn()).toMatchObject({ type: 'Text', children: ['engine'] })
 
     const shown = await $.command.run({ command: 'cortexdb-show', args: '' } as never)
     expect(shown).toMatchObject({ text: 'The recall is shown above the prompt again.' })

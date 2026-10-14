@@ -423,7 +423,13 @@ async function capture($: EngineInterface) {
     const from = mark.lastKey === '' ? -1 : history.map(keyOf).lastIndexOf(mark.lastKey)
     const fresh = history.slice(from + 1)
 
-    const root = (await $.session.root?.().catch(() => '')) ?? ''
+    let root = ''
+    try {
+      root = await $.session.root()
+    } catch {
+      // A build without session.root, or one that cannot name it: the digest
+      // keeps absolute paths.
+    }
     const { digest, userTurns } = digestOf(fresh, root)
     if (userTurns < CAPTURE_MIN_USER_TURNS) return
 
