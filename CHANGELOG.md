@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.129.3] - 2026-10-15
+
+### Fixed
+
+- `geo.GeoIndex.Insert` left an earlier point with the same ID in its grid
+  cell, so a moved point was still found at its old location and a point
+  inserted twice in place was listed twice (#39).
+- `geo.GeoIndex.SearchRadius` sized its longitude window as at the equator,
+  so it missed points inside the radius away from the equator and never
+  looked across the antimeridian (#40).
+- `ProductQuantizer.DeserializeCodebooks` panicked on truncated data,
+  allocated from an untrusted header, and left a half-loaded quantizer on
+  failure; it now checks the header against the body first (#41).
+- `BinaryQuantizer.SearchBinary` ranked codes of the wrong length first and
+  panicked on a non-positive `topK` (#42).
+
 ## [2.129.2] - 2026-10-14
 
 ### Fixed
