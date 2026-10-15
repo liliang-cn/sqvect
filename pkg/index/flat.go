@@ -70,7 +70,7 @@ func (f *FlatIndex) Search(query []float32, k int) ([]string, []float32) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
 
-	if len(f.vectors) == 0 {
+	if len(f.vectors) == 0 || k <= 0 {
 		return []string{}, []float32{}
 	}
 
