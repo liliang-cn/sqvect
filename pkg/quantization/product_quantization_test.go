@@ -1,6 +1,7 @@
 package quantization
 
 import (
+	"encoding/binary"
 	"math"
 	"math/rand"
 	"testing"
@@ -278,5 +279,54 @@ func BenchmarkPQSearch(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		pq.SearchPQ(query, codes, 10)
+	}
+}
+
+func TestDeserializeCodebooksRejectsMalformedData(t *testing.T) {
+	pq, _ := NewProductQuantizer(16, 2, 4)
+	if err := pq.Train(generateTestVectorsPQ(20, 16)); err != nil {
+		t.Fatalf("Train failed: %v", err)
+	}
+	valid := pq.SerializeCodebooks()
+
+	header := func(m, k, d, sub uint32, body int) []byte {
+		buf := make([]byte, 16+body)
+		for i, v := range []uint32{m, k, d, sub} {
+			binary.LittleEndian.PutUint32(buf[i*4:], v)
+		}
+		return buf
+	}
+
+	cases := map[string][]byte{
+		"truncated body":          valid[:len(valid)-2],
+		"missing codebook":        valid[:len(valid)-4],
+		"trailing bytes":          append(append([]byte{}, valid...), 0, 0, 0, 0),
+		"huge M with no body":     header(0xFFFFFFFF, 4, 16, 8, 0),
+		"huge K with no body":     header(2, 0xFFFFFFFF, 16, 8, 0),
+		"huge subdim, no body":    header(2, 4, 16, 0xFFFFFFFF, 0),
+		"zero subspaces":          header(0, 4, 16, 8, 0),
+		"zero centroids":          header(2, 0, 16, 8, 0),
+		"more than 256 centroids": header(1, 257, 1, 1, 257*4),
+		"D not M times subdim":    header(2, 4, 17, 8, 2*4*8*4),
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			target, _ := NewProductQuantizer(16, 2, 4)
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("DeserializeCodebooks panicked: %v", r)
+					}
+				}()
+				err = target.DeserializeCodebooks(data)
+			}()
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if target.Trained || target.Codebooks[0] != nil {
+				t.Fatal("a rejected load must leave the quantizer untouched")
+			}
+		})
 	}
 }

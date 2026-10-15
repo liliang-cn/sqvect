@@ -261,39 +261,56 @@ func (pq *ProductQuantizer) SerializeCodebooks() []byte {
 	return buf
 }
 
-// DeserializeCodebooks loads codebooks from bytes
+// DeserializeCodebooks loads codebooks from bytes. The data is checked against
+// its own header before anything is allocated, and a rejected load leaves the
+// quantizer unchanged.
 func (pq *ProductQuantizer) DeserializeCodebooks(data []byte) error {
-	if len(data) < 16 {
+	const headerSize = 16
+	if len(data) < headerSize {
 		return errors.New("invalid codebook data")
 	}
 
-	offset := 0
+	m := int(binary.LittleEndian.Uint32(data[0:]))
+	k := int(binary.LittleEndian.Uint32(data[4:]))
+	d := int(binary.LittleEndian.Uint32(data[8:]))
+	subDim := int(binary.LittleEndian.Uint32(data[12:]))
 
-	// Read header
-	pq.M = int(binary.LittleEndian.Uint32(data[offset:]))
-	offset += 4
-	pq.K = int(binary.LittleEndian.Uint32(data[offset:]))
-	offset += 4
-	pq.D = int(binary.LittleEndian.Uint32(data[offset:]))
-	offset += 4
-	pq.SubDim = int(binary.LittleEndian.Uint32(data[offset:]))
-	offset += 4
+	if m == 0 || k == 0 || subDim == 0 {
+		return errors.New("invalid codebook data: header has a zero size")
+	}
+	if k > 256 {
+		return fmt.Errorf("invalid codebook data: %d centroids exceed the byte encoding limit of 256", k)
+	}
 
-	// Initialize codebooks
-	pq.Codebooks = make([][][]float32, pq.M)
+	// m*k*subDim float32 values must fill the body exactly. Divide instead of
+	// multiplying so a hostile header cannot overflow the check.
+	body := len(data) - headerSize
+	if body%4 != 0 {
+		return errors.New("invalid codebook data: body is not a whole number of float32 values")
+	}
+	values := body / 4
+	if m > values/k || values%(m*k) != 0 || values/(m*k) != subDim {
+		return fmt.Errorf("invalid codebook data: header declares %d x %d x %d values but the body holds %d", m, k, subDim, values)
+	}
+	if d != m*subDim {
+		return fmt.Errorf("invalid codebook data: dimension %d is not %d subspaces of %d", d, m, subDim)
+	}
 
-	// Read codebooks
-	for m := 0; m < pq.M; m++ {
-		pq.Codebooks[m] = make([][]float32, pq.K)
-		for k := 0; k < pq.K; k++ {
-			pq.Codebooks[m][k] = make([]float32, pq.SubDim)
-			for d := 0; d < pq.SubDim; d++ {
-				pq.Codebooks[m][k][d] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
+	codebooks := make([][][]float32, m)
+	offset := headerSize
+	for i := range codebooks {
+		codebooks[i] = make([][]float32, k)
+		for j := range codebooks[i] {
+			codebooks[i][j] = make([]float32, subDim)
+			for x := range codebooks[i][j] {
+				codebooks[i][j][x] = math.Float32frombits(binary.LittleEndian.Uint32(data[offset:]))
 				offset += 4
 			}
 		}
 	}
 
+	pq.M, pq.K, pq.D, pq.SubDim = m, k, d, subDim
+	pq.Codebooks = codebooks
 	pq.Trained = true
 	return nil
 }

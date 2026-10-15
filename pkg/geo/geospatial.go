@@ -82,6 +82,12 @@ func (g *GeoIndex) Insert(point GeoPoint) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	// Replace any earlier point with this ID, including its grid entry,
+	// so a moved or re-inserted point is never left behind in its old cell.
+	if old, exists := g.points[point.ID]; exists {
+		g.removeFromGrid(old)
+	}
+
 	// Store point
 	g.points[point.ID] = &point
 
@@ -105,24 +111,31 @@ func (g *GeoIndex) Delete(id string) bool {
 	// Remove from main index
 	delete(g.points, id)
 
-	// Remove from grid index
-	gridKey := g.getGridKey(point.Coordinate)
-	if cells, ok := g.grid[gridKey]; ok {
-		for i, p := range cells {
-			if p.ID == id {
-				// Remove element by swapping with last and truncating
-				g.grid[gridKey][i] = cells[len(cells)-1]
-				g.grid[gridKey] = cells[:len(cells)-1]
-				break
-			}
-		}
-		// Clean up empty cells
-		if len(g.grid[gridKey]) == 0 {
-			delete(g.grid, gridKey)
-		}
-	}
+	g.removeFromGrid(point)
 
 	return true
+}
+
+// removeFromGrid drops a point from its grid cell. The caller holds g.mu.
+func (g *GeoIndex) removeFromGrid(point *GeoPoint) {
+	gridKey := g.getGridKey(point.Coordinate)
+	cells, ok := g.grid[gridKey]
+	if !ok {
+		return
+	}
+	for i, p := range cells {
+		if p.ID == point.ID {
+			// Remove element by swapping with last and truncating
+			cells[i] = cells[len(cells)-1]
+			cells[len(cells)-1] = nil
+			g.grid[gridKey] = cells[:len(cells)-1]
+			break
+		}
+	}
+	// Clean up empty cells
+	if len(g.grid[gridKey]) == 0 {
+		delete(g.grid, gridKey)
+	}
 }
 
 // SearchRadius finds all points within a given radius from a center point
