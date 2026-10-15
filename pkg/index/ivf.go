@@ -440,6 +440,9 @@ func min(a, b int) int {
 // Delete removes a vector from the index
 func (ivf *IVFIndex) Delete(id string) error {
 	ivf.mutations.Add(1)
+	ivf.mu.Lock()
+	defer ivf.mu.Unlock()
+
 	if !ivf.Trained {
 		return errors.New("index not trained")
 	}
@@ -465,17 +468,21 @@ func (ivf *IVFIndex) Delete(id string) error {
 		ivf.Vectors = append(ivf.Vectors[:vectorIndex], ivf.Vectors[vectorIndex+1:]...)
 	}
 
-	// Remove from inverted lists
+	// Remove from inverted lists. Every list can hold indices above the
+	// removed one, including the list that held it, so each is walked to the
+	// end and shifted down.
 	for i := range ivf.Invlists {
-		for j, idx := range ivf.Invlists[i] {
+		kept := ivf.Invlists[i][:0]
+		for _, idx := range ivf.Invlists[i] {
 			if idx == vectorIndex {
-				ivf.Invlists[i] = append(ivf.Invlists[i][:j], ivf.Invlists[i][j+1:]...)
-				break
-			} else if idx > vectorIndex {
-				// Update indices after deletion
-				ivf.Invlists[i][j] = idx - 1
+				continue
 			}
+			if idx > vectorIndex {
+				idx--
+			}
+			kept = append(kept, idx)
 		}
+		ivf.Invlists[i] = kept
 	}
 
 	return nil

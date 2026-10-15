@@ -313,3 +313,35 @@ func BenchmarkIVFSearch(b *testing.B) {
 		}
 	}
 }
+
+func TestIVFDeleteKeepsInvertedListsAligned(t *testing.T) {
+	ivf := NewIVFIndex(2, 1)
+	if err := ivf.Train([][]float32{{0, 0}}); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range [][]float32{{0, 0}, {1, 1}, {2, 2}, {3, 3}} {
+		if err := ivf.Add(string(rune('a'+i)), v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ivf.Delete("a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ivf.Delete("c"); err != nil {
+		t.Fatal(err)
+	}
+
+	ids, dists, err := ivf.Search([]float32{3, 3}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "d" || ids[1] != "b" {
+		t.Fatalf("expected [d b] after deleting a and c, got %v", ids)
+	}
+	if dists[0] != 0 {
+		t.Fatalf("expected the exact match first, got distance %v", dists[0])
+	}
+	if err := ivf.Delete("a"); err == nil {
+		t.Fatal("expected deleting a removed ID to fail")
+	}
+}
