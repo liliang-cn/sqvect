@@ -559,3 +559,69 @@ func TestInsertExistingIDMovesPoint(t *testing.T) {
 		t.Fatalf("deleted point still found at its first location: %+v", res)
 	}
 }
+
+func TestSearchRadiusAtHighLatitude(t *testing.T) {
+	idx := NewGeoIndex()
+	center := Coordinate{Lat: 70, Lng: 20}
+	// One degree of longitude is only ~38 km at latitude 70.
+	east := Coordinate{Lat: 70, Lng: 22.5}
+	if d := haversineDistance(center, east); d > 100 {
+		t.Fatalf("test setup: expected a point under 100 km away, got %.1f km", d)
+	}
+	if err := idx.Insert(GeoPoint{ID: "east", Coordinate: east}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := idx.SearchRadius(center, 100, Kilometers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("SearchRadius found %d points within 100 km, want 1", len(res))
+	}
+}
+
+func TestSearchRadiusAcrossAntimeridian(t *testing.T) {
+	idx := NewGeoIndex()
+	if err := idx.Insert(GeoPoint{ID: "west", Coordinate: Coordinate{Lat: 0, Lng: -179.9}}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := idx.SearchRadius(Coordinate{Lat: 0, Lng: 179.9}, 50, Kilometers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res) != 1 {
+		t.Fatalf("SearchRadius across the antimeridian found %d points, want 1", len(res))
+	}
+}
+
+func TestSearchRadiusMatchesBruteForce(t *testing.T) {
+	idx := NewGeoIndex()
+	var all []Coordinate
+	for lat := -89.0; lat <= 89; lat += 7.3 {
+		for lng := -179.0; lng <= 179; lng += 11.7 {
+			c := Coordinate{Lat: lat, Lng: lng}
+			all = append(all, c)
+			if err := idx.Insert(GeoPoint{ID: fmt.Sprintf("%.1f,%.1f", lat, lng), Coordinate: c}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	centers := []Coordinate{{0, 0}, {45, 10}, {70, 20}, {-60, 179}, {89, 0}, {-89, -170}, {10, -179.5}}
+	for _, center := range centers {
+		for _, radius := range []float64{50, 500, 1500, 5000} {
+			want := 0
+			for _, c := range all {
+				if haversineDistance(center, c) <= radius {
+					want++
+				}
+			}
+			res, err := idx.SearchRadius(center, radius, Kilometers)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res) != want {
+				t.Errorf("center %+v radius %.0f km: index returned %d points, brute force %d", center, radius, len(res), want)
+			}
+		}
+	}
+}
