@@ -79,6 +79,14 @@ func (sq *ScalarQuantizer) Train(vectors [][]float32) error {
 		return errors.New("no training vectors provided")
 	}
 
+	// Check every vector before reading any of them: the first one seeds the
+	// ranges below, so a short one must be rejected, not indexed.
+	for _, vec := range vectors {
+		if len(vec) != sq.Dimension {
+			return fmt.Errorf("vector dimension %d doesn't match quantizer dimension %d", len(vec), sq.Dimension)
+		}
+	}
+
 	// Initialize min/max
 	for d := 0; d < sq.Dimension; d++ {
 		sq.Min[d] = vectors[0][d]
@@ -87,10 +95,6 @@ func (sq *ScalarQuantizer) Train(vectors [][]float32) error {
 
 	// Find min/max for each dimension
 	for _, vec := range vectors {
-		if len(vec) != sq.Dimension {
-			return fmt.Errorf("vector dimension %d doesn't match quantizer dimension %d", len(vec), sq.Dimension)
-		}
-
 		for d := 0; d < sq.Dimension; d++ {
 			if vec[d] < sq.Min[d] {
 				sq.Min[d] = vec[d]
