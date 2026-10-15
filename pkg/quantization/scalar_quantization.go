@@ -65,11 +65,18 @@ func (sq *ScalarQuantizer) Save(w io.Writer) error {
 
 // Load deserializes the quantizer
 func (sq *ScalarQuantizer) Load(r io.Reader) error {
-	dec := gob.NewDecoder(r)
-	if err := dec.Decode(sq); err != nil {
+	var loaded ScalarQuantizer
+	if err := gob.NewDecoder(r).Decode(&loaded); err != nil {
 		return err
 	}
-	sq.step = sq.computeSteps()
+	if loaded.NBits < 1 || loaded.NBits > 8 {
+		return fmt.Errorf("invalid quantizer data: nbits must be between 1 and 8, got %d", loaded.NBits)
+	}
+	if loaded.Dimension < 0 || len(loaded.Min) != loaded.Dimension || len(loaded.Max) != loaded.Dimension {
+		return fmt.Errorf("invalid quantizer data: dimension %d does not match %d minimums and %d maximums", loaded.Dimension, len(loaded.Min), len(loaded.Max))
+	}
+	loaded.step = loaded.computeSteps()
+	*sq = loaded
 	return nil
 }
 
@@ -272,8 +279,15 @@ func (bq *BinaryQuantizer) Save(w io.Writer) error {
 
 // Load deserializes the quantizer
 func (bq *BinaryQuantizer) Load(r io.Reader) error {
-	dec := gob.NewDecoder(r)
-	return dec.Decode(bq)
+	var loaded BinaryQuantizer
+	if err := gob.NewDecoder(r).Decode(&loaded); err != nil {
+		return err
+	}
+	if loaded.Dimension < 0 || len(loaded.Threshold) != loaded.Dimension {
+		return fmt.Errorf("invalid quantizer data: dimension %d does not match %d thresholds", loaded.Dimension, len(loaded.Threshold))
+	}
+	*bq = loaded
+	return nil
 }
 
 // Train learns thresholds from training data
