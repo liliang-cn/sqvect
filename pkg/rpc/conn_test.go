@@ -56,6 +56,7 @@ type dropper struct {
 type droppedPair struct {
 	client, server net.Conn
 	dead           atomic.Bool
+	lastRead       atomic.Int64 // unix nanos of the client's last packet
 }
 
 func newDropper(t *testing.T, upstream string) *dropper {
@@ -82,6 +83,7 @@ func (d *dropper) accept() {
 			continue
 		}
 		p := &droppedPair{client: c, server: s}
+		p.lastRead.Store(time.Now().UnixNano())
 		d.mu.Lock()
 		d.pairs = append(d.pairs, p)
 		d.mu.Unlock()
@@ -90,6 +92,7 @@ func (d *dropper) accept() {
 			buf := make([]byte, 32<<10)
 			for {
 				n, err := c.Read(buf)
+				p.lastRead.Store(time.Now().UnixNano())
 				if p.dead.Load() {
 					_ = c.(*net.TCPConn).SetLinger(0)
 					_ = c.Close()
@@ -109,10 +112,25 @@ func (d *dropper) accept() {
 	}
 }
 
-// drop loses every open connection silently.
+// drop loses every open connection silently. It first waits for the client
+// to go quiet, as a connection lost while idle does: gRPC still writes a few
+// control frames (BDP pings, ping acks) right after a call, and one of those
+// meeting the reset would let the client reconnect before its next call.
 func (d *dropper) drop() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	const quiet = 100 * time.Millisecond
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		idle := true
+		for _, p := range d.pairs {
+			if time.Since(time.Unix(0, p.lastRead.Load())) < quiet {
+				idle = false
+			}
+		}
+		if idle {
+			break
+		}
+	}
 	for _, p := range d.pairs {
 		p.dead.Store(true)
 		_ = p.server.Close()
