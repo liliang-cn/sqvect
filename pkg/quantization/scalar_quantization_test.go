@@ -415,3 +415,29 @@ func TestScalarFastPathsMatchDecode(t *testing.T) {
 		t.Fatal("the fused path is for 8-bit codes only")
 	}
 }
+
+func TestBinaryQuantizerSearchSkipsMismatchedCodes(t *testing.T) {
+	bq := NewBinaryQuantizer(32)
+	query := []byte{0xFF, 0x00, 0xFF, 0x00}
+	database := [][]byte{
+		{0x00, 0xFF, 0x00, 0xFF}, // 0: every bit differs
+		{0xFF, 0x00},             // 1: wrong length, cannot be compared
+		{0xFF, 0x00, 0xFF, 0x01}, // 2: one bit differs
+		nil,                      // 3: empty
+	}
+
+	indices, distances := bq.SearchBinary(query, database, 4)
+	if len(indices) != 2 || indices[0] != 2 || indices[1] != 0 {
+		t.Fatalf("indices = %v (distances %v), want [2 0]: codes of the wrong length must not rank", indices, distances)
+	}
+	if distances[0] != 1 || distances[1] != 32 {
+		t.Fatalf("distances = %v, want [1 32]", distances)
+	}
+
+	for _, k := range []int{0, -1} {
+		indices, distances = bq.SearchBinary(query, database, k)
+		if len(indices) != 0 || len(distances) != 0 {
+			t.Fatalf("topK=%d returned %v %v, want no results", k, indices, distances)
+		}
+	}
+}
