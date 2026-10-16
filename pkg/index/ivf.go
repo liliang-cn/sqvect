@@ -483,5 +483,8 @@ func (ivf *IVFIndex) Delete(id string) error {
 
 // Size returns the number of vectors in the index
 func (ivf *IVFIndex) Size() int {
+	ivf.mu.RLock()
+	defer ivf.mu.RUnlock()
+
 	return len(ivf.Vectors)
 }
