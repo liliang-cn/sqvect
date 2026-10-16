@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.130.1] - 2026-10-16
+
+### Fixed
+
+- A one-word query was padded with the shortest memories in the store. After
+  the memories that contain the word, the semantic hits filled the rest of
+  topK, and a single word embeds next to whatever is shortest: on the shared
+  brain the user's city (seven characters) and name came back for 48 of 60
+  one-word queries. Semantic hits for a one-word query now have to clear the
+  memory floor plus 0.16 (0.47 on embeddinggemma). They reach 3 of the 60,
+  hit@5 stays 0.917, and a memory that means the word without containing it
+  (在持美股 for the VOO and OKLO holdings) still fills. Sentence queries are
+  unchanged: golden-set hit@5 0.792 and MRR 0.627 before and after.
+- Index and quantizer fixes contributed in #43–#53: IVF inverted lists stay
+  aligned after Delete and an ID added again replaces its entry; LSH and HNSW
+  replace or re-insert an ID that was there before; HNSW and IVF snapshots
+  load atomically and inconsistent ones are rejected, so the index is rebuilt
+  instead of panicking; a non-positive k returns nothing; scalar, binary and
+  product quantizers validate their state, sizes, training vectors, queries
+  and codes; the IVF size is read under the index lock.
+- TestProductQuantizerSearch failed about 8 times in 2,000 runs: it required
+  the query's own code to rank first, which a lossy product quantizer does
+  not promise. It now requires it in the top 5.
+
 ## [2.130.0] - 2026-10-16
 
 ### Changed
