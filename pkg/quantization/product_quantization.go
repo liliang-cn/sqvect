@@ -143,6 +143,13 @@ func (pq *ProductQuantizer) ComputeDistance(codes []byte, query []float32) (floa
 		return 0, errors.New("quantizer not trained")
 	}
 
+	if len(query) != pq.D {
+		return 0, fmt.Errorf("query dimension %d doesn't match quantizer dimension %d", len(query), pq.D)
+	}
+	if err := pq.checkCodes(codes); err != nil {
+		return 0, err
+	}
+
 	// Precompute distance table
 	distTable := pq.computeDistanceTable(query)
 
@@ -153,6 +160,20 @@ func (pq *ProductQuantizer) ComputeDistance(codes []byte, query []float32) (floa
 	}
 
 	return totalDist, nil
+}
+
+// checkCodes reports whether codes has one entry per subspace and each entry
+// names a centroid.
+func (pq *ProductQuantizer) checkCodes(codes []byte) error {
+	if len(codes) != pq.M {
+		return fmt.Errorf("codes length %d doesn't match number of subspaces %d", len(codes), pq.M)
+	}
+	for m, c := range codes {
+		if int(c) >= pq.K {
+			return fmt.Errorf("invalid code %d for subspace %d", c, m)
+		}
+	}
+	return nil
 }
 
 // computeDistanceTable precomputes distances between query and all centroids
@@ -175,7 +196,7 @@ func (pq *ProductQuantizer) computeDistanceTable(query []float32) [][]float32 {
 
 // SearchPQ performs approximate nearest neighbor search on PQ-compressed vectors
 func (pq *ProductQuantizer) SearchPQ(query []float32, codes [][]byte, topK int) ([]int, []float32) {
-	if !pq.Trained || len(codes) == 0 {
+	if !pq.Trained || len(codes) == 0 || len(query) != pq.D || topK <= 0 {
 		return nil, nil
 	}
 
@@ -188,13 +209,18 @@ func (pq *ProductQuantizer) SearchPQ(query []float32, codes [][]byte, topK int) 
 		dist float32
 	}
 
-	results := make([]result, len(codes))
+	// A code that does not belong to this quantizer cannot be scored; skip it
+	// rather than index past its codebook. Indices still refer to codes.
+	results := make([]result, 0, len(codes))
 	for i, code := range codes {
+		if pq.checkCodes(code) != nil {
+			continue
+		}
 		dist := float32(0)
 		for m := 0; m < pq.M; m++ {
 			dist += distTable[m][code[m]]
 		}
-		results[i] = result{idx: i, dist: dist}
+		results = append(results, result{idx: i, dist: dist})
 	}
 
 	// Sort by distance
