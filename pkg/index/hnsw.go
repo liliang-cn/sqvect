@@ -578,6 +578,9 @@ func (h *HNSW) Search(query []float32, k int, ef int) ([]string, []float32) {
 	if limit > len(results) {
 		limit = len(results)
 	}
+	if limit < 0 {
+		limit = 0
+	}
 
 	ids := make([]string, limit)
 	distances := make([]float32, limit)

@@ -230,8 +230,8 @@ func (ivf *IVFIndex) Search(query []float32, k int) ([]string, []float32, error)
 		return candidates[i].dist < candidates[j].dist
 	})
 
-	// Return top-k results
-	topK := min(k, len(candidates))
+	// Return top-k results; a non-positive k asks for nothing
+	topK := max(min(k, len(candidates)), 0)
 	ids := make([]string, topK)
 	distances := make([]float32, topK)
 

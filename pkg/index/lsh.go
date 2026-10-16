@@ -119,6 +119,10 @@ func (lsh *LSHIndex) Search(query []float32, k int) ([]LSHSearchResult, error) {
 		return nil, fmt.Errorf("dimension mismatch: expected %d, got %d", lsh.dimension, len(query))
 	}
 
+	if k <= 0 {
+		return []LSHSearchResult{}, nil
+	}
+
 	lsh.mu.RLock()
 	defer lsh.mu.RUnlock()
 
@@ -162,6 +166,10 @@ func (lsh *LSHIndex) Search(query []float32, k int) ([]LSHSearchResult, error) {
 func (lsh *LSHIndex) SearchWithMultiProbe(query []float32, k int, numProbes int) ([]LSHSearchResult, error) {
 	if len(query) != lsh.dimension {
 		return nil, fmt.Errorf("dimension mismatch: expected %d, got %d", lsh.dimension, len(query))
+	}
+
+	if k <= 0 {
+		return []LSHSearchResult{}, nil
 	}
 
 	lsh.mu.RLock()
