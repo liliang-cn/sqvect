@@ -412,7 +412,11 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 		hits = nil // semantic already answered; lexical failing must not erase it
 	}
 	if len(semanticHits) > 0 {
-		hits = mergeMemoryHits(semanticHits, hits, req.TopK)
+		if isBareKeyword(resolution.Plan.Query) && len(hits) > 0 {
+			hits = mergeMemoryHits(hits, semanticHits, req.TopK)
+		} else {
+			hits = fuseMemoryHits(semanticHits, hits, req.TopK)
+		}
 	}
 	if len(graphHits) > 0 {
 		hits = mergeMemoryHits(graphHits, hits, req.TopK)
@@ -1067,6 +1071,87 @@ func mergeMemoryHits(graphHits, lexicalHits []MemorySearchHit, topK int) []Memor
 		}
 	}
 	return merged
+}
+
+// fuseMemoryHits ranks the semantic and keyword answers together by
+// reciprocal rank, the way knowledge search fuses its two lists.
+//
+// The semantic list used to go first and the keyword list only filled what
+// was left, so five vague neighbours always beat an exact match: asking "HA"
+// returned the user's name and city, every one above the 0.31 floor, while the
+// memories about HA came back only to a keyword search. A memory both lists
+// found ranks first; a tie goes to the keyword hit, which names what was asked.
+// Each hit keeps the score its own search gave it.
+func fuseMemoryHits(semanticHits, lexicalHits []MemorySearchHit, topK int) []MemorySearchHit {
+	type fused struct {
+		hit      MemorySearchHit
+		rrf      float64
+		lexical  bool
+		firstPos int
+	}
+	byID := make(map[string]*fused, len(semanticHits)+len(lexicalHits))
+	var order []*fused
+	add := func(hits []MemorySearchHit, lexical bool) {
+		for rank, hit := range hits {
+			f, ok := byID[hit.Memory.ID]
+			if !ok {
+				f = &fused{hit: hit, firstPos: len(order)}
+				byID[hit.Memory.ID] = f
+				order = append(order, f)
+			}
+			f.rrf += 1.0 / (hybridRRFK + float64(rank+1))
+			if lexical {
+				f.lexical = true
+			}
+		}
+	}
+	add(semanticHits, false)
+	add(lexicalHits, true)
+	sort.SliceStable(order, func(i, j int) bool {
+		a, b := order[i], order[j]
+		if a.rrf != b.rrf {
+			return a.rrf > b.rrf
+		}
+		if a.lexical != b.lexical {
+			return a.lexical
+		}
+		return a.firstPos < b.firstPos
+	})
+	if topK <= 0 || topK > len(order) {
+		topK = len(order)
+	}
+	out := make([]MemorySearchHit, 0, topK)
+	for _, f := range order[:topK] {
+		out = append(out, f.hit)
+	}
+	return out
+}
+
+// isBareKeyword reports a query that is a single term — an acronym, a name,
+// a word or two of Chinese — rather than a question. An embedding of "HA" or
+// "大脑" carries next to no meaning, and its nearest neighbours are whatever
+// short memories sit near the middle of the space, so for such a query the
+// memories that contain the term come first and semantic hits only fill.
+func isBareKeyword(query string) bool {
+	fields := strings.Fields(query)
+	if len(fields) != 1 {
+		return false
+	}
+	runes := []rune(fields[0])
+	cjk := 0
+	for _, r := range runes {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			cjk++
+		case unicode.IsLetter(r), unicode.IsDigit(r), strings.ContainsRune("-_./+#", r):
+		default:
+			return false
+		}
+	}
+	if cjk > 0 {
+		return cjk == len(runes) && cjk <= 4
+	}
+	return len(runes) <= 32
 }
 
 // applyMemoryRecallBoosts folds importance and age into a relevance score as a

@@ -40,7 +40,13 @@ func (db *DB) searchKnowledgeHybrid(ctx context.Context, query string, opts Grap
 	}
 	base := vres
 
-	fused := packGraphRAGContext(fuseHybridChunks(vres.Chunks, lres.Chunks, opts.TopK), opts)
+	var fused []GraphRAGChunkResult
+	if isBareKeyword(query) && len(lres.Chunks) > 0 {
+		fused = keywordFirstChunks(vres.Chunks, lres.Chunks, opts.TopK)
+	} else {
+		fused = fuseHybridChunks(vres.Chunks, lres.Chunks, opts.TopK)
+	}
+	fused = packGraphRAGContext(fused, opts)
 	out := &GraphRAGQueryResult{
 		Query:    base.Query,
 		Plan:     base.Plan,
@@ -110,6 +116,33 @@ func fuseHybridChunks(vector, lexical []GraphRAGChunkResult, topK int) []GraphRA
 		out = append(out, c)
 	}
 	return out
+}
+
+// keywordFirstChunks answers a bare keyword (see isBareKeyword) with the
+// chunks that contain it, in keyword order, and fills the rest from the
+// vector list. A one-word query embeds near whatever is thinnest: asking "HA"
+// put a chunk holding only ")" first.
+func keywordFirstChunks(vector, lexical []GraphRAGChunkResult, topK int) []GraphRAGChunkResult {
+	fused := fuseHybridChunks(vector, lexical, 0)
+	sort.SliceStable(fused, func(i, j int) bool {
+		a, b := fused[i].LexicalRank > 0, fused[j].LexicalRank > 0
+		if a != b {
+			return a
+		}
+		if a {
+			return fused[i].LexicalRank < fused[j].LexicalRank
+		}
+		return false
+	})
+	if topK > 0 && len(fused) > topK {
+		fused = fused[:topK]
+	}
+	// The score is the reciprocal rank of the place given here, so whatever
+	// sorts by score afterwards keeps this order.
+	for i := range fused {
+		fused[i].Score = 1.0 / (hybridRRFK + float64(i+1))
+	}
+	return fused
 }
 
 type keywordFallbackKey struct{}

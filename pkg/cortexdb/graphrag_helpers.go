@@ -359,22 +359,46 @@ func enforceChunkCharLimit(chunks []string, chunkSize, chunkOverlap int) []strin
 			}
 			continue
 		}
-		step := maxChars - overlapChars
-		if step <= 0 {
-			step = maxChars
-		}
-		for start := 0; start < len(runes); start += step {
+		// A window ends at a space or punctuation near its limit rather than
+		// mid-word, and a remainder too short to mean anything joins the last
+		// window instead of becoming a chunk of its own: sliced at a fixed
+		// width, Chinese text with few spaces left chunks like ")" and
+		// "dations） 1.", whose embeddings sit near everything and ranked first
+		// for short queries.
+		minTail := maxChars / 4
+		for start := 0; start < len(runes); {
 			end := start + maxChars
-			if end > len(runes) {
+			if end+minTail >= len(runes) {
 				end = len(runes)
+			} else {
+				end = chunkBoundary(runes, start+maxChars/2, end)
 			}
-			limited = append(limited, string(runes[start:end]))
+			limited = append(limited, strings.TrimSpace(string(runes[start:end])))
 			if end == len(runes) {
 				break
+			}
+			next := end - overlapChars
+			if next <= start {
+				next = end
+			}
+			start = chunkBoundary(runes, start+1, next)
+			for start < end && unicode.IsSpace(runes[start]) {
+				start++
 			}
 		}
 	}
 	return limited
+}
+
+// chunkBoundary returns the last position in (lo, hi] that falls just after a
+// space or a punctuation mark, or hi when there is none.
+func chunkBoundary(runes []rune, lo, hi int) int {
+	for i := hi; i > lo; i-- {
+		if r := runes[i-1]; unicode.IsSpace(r) || unicode.IsPunct(r) {
+			return i
+		}
+	}
+	return hi
 }
 
 // splitChunkSentences breaks text into sentences on ASCII and CJK terminators,

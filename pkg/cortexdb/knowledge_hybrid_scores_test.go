@@ -3,6 +3,7 @@ package cortexdb
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -115,4 +116,22 @@ func ids(chunks []GraphRAGChunkResult) []string {
 		out = append(out, c.ID)
 	}
 	return out
+}
+
+// Asking "HA" put a chunk holding only ")" first: a one-word query embeds near
+// the thinnest chunks, and by reciprocal rank the vector's first place ties
+// the keyword's. For a bare keyword the chunks that contain it come first.
+func TestABareKeywordPutsTheChunksThatContainItFirst(t *testing.T) {
+	vector := []GraphRAGChunkResult{{ID: "scrap", Score: 0.67}, {ID: "tail", Score: 0.42}, {ID: "ha-2", Score: 0.30}}
+	lexical := []GraphRAGChunkResult{{ID: "ha-1", Score: 0.03}, {ID: "ha-2", Score: 0.02}}
+	fused := keywordFirstChunks(vector, lexical, 3)
+	if got, want := ids(fused), []string{"ha-1", "ha-2", "scrap"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order %v, want %v", got, want)
+	}
+	// Scores fall with the order, so a later sort by score cannot undo it.
+	for i := 1; i < len(fused); i++ {
+		if fused[i].Score >= fused[i-1].Score {
+			t.Fatalf("score %d (%v) is not below score %d (%v)", i, fused[i].Score, i-1, fused[i-1].Score)
+		}
+	}
 }

@@ -3,6 +3,7 @@ package cortexdb
 import (
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestSplitGraphRAGTextSentenceAware(t *testing.T) {
@@ -61,5 +62,44 @@ func TestSplitGraphRAGTextShortReturnsOne(t *testing.T) {
 	}
 	if got := splitGraphRAGText("   ", 120, 0); got != nil {
 		t.Errorf("blank text should be nil, got %v", got)
+	}
+}
+
+// Chinese text with few spaces is one long "word" run, so the character limit
+// slices it. Sliced at a fixed width it left a last chunk of ")" and windows
+// that began mid-word; such scraps embed near everything and topped recall for
+// short queries.
+func TestCharLimitLeavesNoScrapsAndCutsAtBoundaries(t *testing.T) {
+	var b strings.Builder
+	for i := 0; b.Len() < 4000; i++ {
+		b.WriteString("长期记忆分层架构：工作记忆、情节记忆和语义记忆各司其职（working, episodic and semantic memory）。")
+	}
+	text := b.String() + ")"
+	for _, overlap := range []int{0, 20} {
+		chunks := splitGraphRAGText(text, 120, overlap)
+		if len(chunks) < 2 {
+			t.Fatalf("overlap %d: expected several chunks, got %d", overlap, len(chunks))
+		}
+		for i, c := range chunks {
+			n := len([]rune(c))
+			if n < 120 {
+				t.Errorf("overlap %d: chunk %d is a %d-rune scrap: %q", overlap, i, n, c)
+			}
+			if n > 480+120 {
+				t.Errorf("overlap %d: chunk %d has %d runes, over the limit plus tail", overlap, i, n)
+			}
+		}
+		last := []rune(chunks[len(chunks)-1])
+		if string(last[len(last)-1]) != ")" {
+			t.Errorf("overlap %d: the text's end was lost", overlap)
+		}
+		for i, c := range chunks[:len(chunks)-1] {
+			r := []rune(c)
+			// Ends on punctuation, or on a whole word that stands between spaces in the text.
+			fields := strings.Fields(c)
+			if end := r[len(r)-1]; !unicode.IsPunct(end) && !strings.Contains(text, " "+fields[len(fields)-1]+" ") {
+				t.Errorf("overlap %d: chunk %d ends mid-word with %q", overlap, i, string(end))
+			}
+		}
 	}
 }

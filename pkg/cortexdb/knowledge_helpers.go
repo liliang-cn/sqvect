@@ -210,12 +210,10 @@ func (db *DB) aggregateKnowledgeHits(ctx context.Context, chunks []GraphRAGChunk
 		agg.hit.Entities = uniqueSortedStrings(sortedKeysFromSet(agg.entitySet))
 		results = append(results, agg.hit)
 	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Score == results[j].Score {
-			return results[i].KnowledgeID < results[j].KnowledgeID
-		}
-		return results[i].Score > results[j].Score
-	})
+	// Equal scores keep the order retrieval ranked them in. Fused scores tie
+	// often (1/61 for a first place in either list), and the old tie-break by
+	// id put a document first for sorting early in the alphabet.
+	sort.SliceStable(results, func(i, j int) bool { return results[i].Score > results[j].Score })
 	for i := range results {
 		results[i].Rank = i + 1
 	}
