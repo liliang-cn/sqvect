@@ -101,7 +101,16 @@ func (lsh *LSHIndex) Insert(id string, vector []float32) error {
 	lsh.mu.Lock()
 	defer lsh.mu.Unlock()
 
-	// Store the vector
+	// Re-inserting an ID replaces it: its entries in the old vector's buckets
+	// must go, or they outlive the vector and Delete (which hashes the stored
+	// vector) can no longer find them.
+	if old, exists := lsh.vectors[id]; exists {
+		lsh.removeFromBuckets(id, old)
+	}
+
+	// Store a copy so a caller reusing its slice cannot move the vector away
+	// from the buckets it was hashed into.
+	vector = append([]float32(nil), vector...)
 	lsh.vectors[id] = vector
 
 	// Add to all hash tables
@@ -222,17 +231,9 @@ func (lsh *LSHIndex) SearchWithMultiProbe(query []float32, k int, numProbes int)
 	return results, nil
 }
 
-// Delete removes a vector from the index
-func (lsh *LSHIndex) Delete(id string) bool {
-	lsh.mu.Lock()
-	defer lsh.mu.Unlock()
-
-	vector, exists := lsh.vectors[id]
-	if !exists {
-		return false
-	}
-
-	// Remove from all hash tables
+// removeFromBuckets drops id from the bucket it occupies in every hash table.
+// vector must be the vector id was inserted with. The caller must hold lsh.mu.
+func (lsh *LSHIndex) removeFromBuckets(id string, vector []float32) {
 	for tableIdx := 0; tableIdx < lsh.numTables; tableIdx++ {
 		hash := lsh.computeHash(vector, tableIdx)
 		if bucket, exists := lsh.hashTables[tableIdx][hash]; exists {
@@ -250,6 +251,19 @@ func (lsh *LSHIndex) Delete(id string) bool {
 			}
 		}
 	}
+}
+
+// Delete removes a vector from the index
+func (lsh *LSHIndex) Delete(id string) bool {
+	lsh.mu.Lock()
+	defer lsh.mu.Unlock()
+
+	vector, exists := lsh.vectors[id]
+	if !exists {
+		return false
+	}
+
+	lsh.removeFromBuckets(id, vector)
 
 	// Remove from vector storage
 	delete(lsh.vectors, id)
