@@ -24,6 +24,7 @@ type IVFIndex struct {
 	Trained    bool
 	NProbe     int // Number of clusters to search
 	mu         sync.RWMutex
+	idPos      map[string]int // lookup cache for IDs, see positionOf
 
 	// mutations counts every change, as HNSW's does.
 	mutations atomic.Uint64
@@ -91,6 +92,7 @@ func (ivf *IVFIndex) Load(r io.Reader) error {
 	defer ivf.mu.Unlock()
 
 	dec := gob.NewDecoder(r)
+	ivf.idPos = nil
 
 	// Decode parameters
 	if err := dec.Decode(&ivf.NCentroids); err != nil {
@@ -164,6 +166,22 @@ func (ivf *IVFIndex) Add(id string, vector []float32) error {
 	// Find nearest centroid
 	centroidIdx := ivf.findNearestCentroid(vector)
 
+	// An ID that is already indexed is replaced in place: appending a second
+	// entry would leave the old vector searchable and Delete would only remove one.
+	if existing, ok := ivf.positionOf(id); ok {
+		for i := range ivf.Invlists {
+			for j, idx := range ivf.Invlists[i] {
+				if idx == existing {
+					ivf.Invlists[i] = append(ivf.Invlists[i][:j], ivf.Invlists[i][j+1:]...)
+					break
+				}
+			}
+		}
+		ivf.Vectors[existing] = vector
+		ivf.Invlists[centroidIdx] = append(ivf.Invlists[centroidIdx], existing)
+		return nil
+	}
+
 	// Add to inverted list
 	vectorIdx := len(ivf.Vectors)
 	ivf.Invlists[centroidIdx] = append(ivf.Invlists[centroidIdx], vectorIdx)
@@ -171,8 +189,31 @@ func (ivf *IVFIndex) Add(id string, vector []float32) error {
 	// Store vector and ID
 	ivf.Vectors = append(ivf.Vectors, vector)
 	ivf.IDs = append(ivf.IDs, id)
+	ivf.idPos[id] = vectorIdx
 
 	return nil
+}
+
+// positionOf returns the position of id in IDs. It keeps a lookup map so bulk
+// builds stay linear; the map is rebuilt whenever Delete, Clear or Load have left
+// it out of step with IDs. The caller must hold ivf.mu.
+func (ivf *IVFIndex) positionOf(id string) (int, bool) {
+	if ivf.idPos == nil || len(ivf.idPos) != len(ivf.IDs) {
+		ivf.idPos = make(map[string]int, len(ivf.IDs))
+		for i, storedID := range ivf.IDs {
+			ivf.idPos[storedID] = i
+		}
+	}
+	pos, ok := ivf.idPos[id]
+	if ok && pos < len(ivf.IDs) && ivf.IDs[pos] == id {
+		return pos, true
+	}
+	if ok {
+		// Stale position left by a Delete that shifted IDs: rebuild and look again.
+		ivf.idPos = nil
+		return ivf.positionOf(id)
+	}
+	return 0, false
 }
 
 // Search performs approximate nearest neighbor search
