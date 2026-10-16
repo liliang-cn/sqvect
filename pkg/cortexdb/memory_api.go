@@ -65,6 +65,29 @@ func (db *DB) semanticFloor() float64 {
 	return db.memoryFloor
 }
 
+// bareKeywordFloorMargin raises the semantic floor for a one-word query.
+//
+// The embedding of a single word means little, and its nearest memories are
+// the shortest ones whatever the word is. On the shared brain (2,786
+// memories, embeddinggemma) the user's city, seven characters, and the user's
+// name cleared 0.31 for three of every four queries, and filled the results
+// of 48 of 60 one-word queries after the memories that contain the word.
+// Across those queries the two scored 0.39 at the median and 0.46 at the 90th
+// percentile, while a memory that does not contain the word but means it —
+// 在持美股 for the user's VOO and OKLO holdings, linting for a lint bug,
+// restriction for a hard constraint — scored 0.47–0.65. At floor + 0.16
+// (0.47) they reached 5 of the 60 and those 13 fills stayed. The margin is
+// added to the floor in force, so a floor set for another model moves it too.
+const bareKeywordFloorMargin = 0.16
+
+// memoryFloorFor is the semantic floor for this query.
+func (db *DB) memoryFloorFor(query string) float64 {
+	if isBareKeyword(query) {
+		return db.semanticFloor() + bareKeywordFloorMargin
+	}
+	return db.semanticFloor()
+}
+
 type memoryRow struct {
 	record MemoryRecord
 	vector []byte
@@ -356,8 +379,9 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 				log.Printf("cortexdb: memory semantic search fallback to lexical: %v", searchErr)
 			} else {
 				now := time.Now().UTC()
+				floor := db.memoryFloorFor(resolution.Plan.Query)
 				for _, sm := range scored {
-					if sm.Score < db.semanticFloor() {
+					if sm.Score < floor {
 						continue
 					}
 					record := memoryRecordFromMessage(bucketID, "", sm.Message)

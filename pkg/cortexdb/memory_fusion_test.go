@@ -100,3 +100,67 @@ func TestIsBareKeyword(t *testing.T) {
 		}
 	}
 }
+
+// fixedCosineEmbedder places the query on one axis and each memory at the
+// cosine to it that its content names, so a test can say how close a real
+// model put each memory to a one-word query.
+type fixedCosineEmbedder map[string]float64
+
+func (fixedCosineEmbedder) Dim() int { return 2 }
+func (e fixedCosineEmbedder) Embed(_ context.Context, text string) ([]float32, error) {
+	c, ok := e[text]
+	if !ok {
+		c = 1 // the query itself
+	}
+	return []float32{float32(c), float32(math.Sqrt(1 - c*c))}, nil
+}
+func (e fixedCosineEmbedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
+	out := make([][]float32, len(texts))
+	for i, text := range texts {
+		out[i], _ = e.Embed(ctx, text)
+	}
+	return out, nil
+}
+
+// "VIP" is in one memory. The rest of the list used to be filled with the
+// shortest memories — the user's city and name, which a one-word query lands
+// next to whatever the word is (cosine 0.35–0.45 on embeddinggemma) — while a
+// memory about the floating address it means, closer than that, is welcome.
+func TestABareKeywordIsNotFilledWithMemoriesThatAreOnlyShort(t *testing.T) {
+	memories := map[string]float64{
+		"用户常住在成都":                                                                   0.42,
+		"User's name is Li Liang.":                                                  0.40,
+		"当前没有有证据支持的未掌握知识点。":                                                         0.39,
+		"The brain answers on VIP 192.168.123.253, its own HA resource.":            0.30,
+		"The floating address moves with the Primary when drbd-reactor fails over.": 0.62,
+	}
+	db, err := Open(DefaultConfig(filepath.Join(t.TempDir(), "bare.db")),
+		WithEmbedder(fixedCosineEmbedder(memories)), WithVectorHealing(VectorHealOptions{Disabled: true}))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	ctx := context.Background()
+	i := 0
+	for content := range memories {
+		i++
+		if _, err := db.SaveMemory(ctx, MemorySaveRequest{MemoryID: fmt.Sprintf("m-%d", i), Scope: "global", Content: content}); err != nil {
+			t.Fatalf("save: %v", err)
+		}
+	}
+	res, err := db.SearchMemory(ctx, MemorySearchRequest{Query: "VIP", Scope: "global", TopK: 5})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	var got []string
+	for _, hit := range res.Results {
+		got = append(got, hit.Memory.Content)
+	}
+	want := []string{
+		"The brain answers on VIP 192.168.123.253, its own HA resource.",
+		"The floating address moves with the Primary when drbd-reactor fails over.",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("results:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
