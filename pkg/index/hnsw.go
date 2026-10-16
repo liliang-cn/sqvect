@@ -185,7 +185,10 @@ func (h *HNSW) Save(w io.Writer) error {
 	return nil
 }
 
-// Load deserializes the index from a reader
+// Load deserializes the index from a reader. The snapshot is decoded and
+// checked before anything is replaced, so a truncated or inconsistent one
+// leaves the index as it was: a caller that falls back to rebuilding from its
+// own data must not inherit half a graph.
 func (h *HNSW) Load(r io.Reader) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -193,16 +196,15 @@ func (h *HNSW) Load(r io.Reader) error {
 	dec := gob.NewDecoder(r)
 
 	// Decode parameters
-	if err := dec.Decode(&h.M); err != nil {
+	var m, efConstruction int
+	var entryPoint string
+	if err := dec.Decode(&m); err != nil {
 		return err
 	}
-	h.MaxM = h.M * 2
-	h.ML = 1.0 / math.Log(2.0)
-
-	if err := dec.Decode(&h.EfConstruction); err != nil {
+	if err := dec.Decode(&efConstruction); err != nil {
 		return err
 	}
-	if err := dec.Decode(&h.EntryPoint); err != nil {
+	if err := dec.Decode(&entryPoint); err != nil {
 		return err
 	}
 
@@ -211,16 +213,42 @@ func (h *HNSW) Load(r io.Reader) error {
 	if err := dec.Decode(&count); err != nil {
 		return err
 	}
+	if count < 0 {
+		return fmt.Errorf("HNSW snapshot has a negative node count %d", count)
+	}
 
-	// Decode nodes
-	h.Nodes = make(map[string]*HNSWNode, count)
+	// Decode nodes. count is only a hint for the map: it comes from the
+	// stream and is not trusted for an allocation.
+	nodes := make(map[string]*HNSWNode, min(count, 1<<16))
 	for i := 0; i < count; i++ {
 		var node HNSWNode
 		if err := dec.Decode(&node); err != nil {
 			return err
 		}
-		h.Nodes[node.ID] = &node
+		nodes[node.ID] = &node
 	}
+
+	// A walk starts at the entry point and follows links, so both must name
+	// nodes that exist.
+	if entryPoint != "" && nodes[entryPoint] == nil {
+		return fmt.Errorf("HNSW snapshot entry point %q is not among its nodes", entryPoint)
+	}
+	for id, node := range nodes {
+		for layer, links := range node.Neighbors {
+			for _, to := range links {
+				if nodes[to] == nil {
+					return fmt.Errorf("HNSW snapshot node %q links to missing node %q on layer %d", id, to, layer)
+				}
+			}
+		}
+	}
+
+	h.M = m
+	h.MaxM = m * 2
+	h.ML = 1.0 / math.Log(2.0)
+	h.EfConstruction = efConstruction
+	h.EntryPoint = entryPoint
+	h.Nodes = nodes
 
 	return nil
 }

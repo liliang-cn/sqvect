@@ -85,40 +85,85 @@ func (ivf *IVFIndex) Save(w io.Writer) error {
 	return nil
 }
 
-// Load deserializes the index from a reader
+// Load deserializes the index from a reader. The snapshot is decoded and
+// checked before anything is replaced, so a truncated or inconsistent one
+// leaves the index as it was.
 func (ivf *IVFIndex) Load(r io.Reader) error {
 	ivf.mu.Lock()
 	defer ivf.mu.Unlock()
 
 	dec := gob.NewDecoder(r)
 
+	var (
+		nCentroids, dimension, nProbe int
+		trained                       bool
+		centroids                     [][]float32
+		invlists                      [][]int
+		ids                           []string
+		vectors                       [][]float32
+	)
+
 	// Decode parameters
-	if err := dec.Decode(&ivf.NCentroids); err != nil {
+	if err := dec.Decode(&nCentroids); err != nil {
 		return err
 	}
-	if err := dec.Decode(&ivf.Dimension); err != nil {
+	if err := dec.Decode(&dimension); err != nil {
 		return err
 	}
-	if err := dec.Decode(&ivf.NProbe); err != nil {
+	if err := dec.Decode(&nProbe); err != nil {
 		return err
 	}
-	if err := dec.Decode(&ivf.Trained); err != nil {
+	if err := dec.Decode(&trained); err != nil {
 		return err
 	}
 
 	// Decode data
-	if err := dec.Decode(&ivf.Centroids); err != nil {
+	if err := dec.Decode(&centroids); err != nil {
 		return err
 	}
-	if err := dec.Decode(&ivf.Invlists); err != nil {
+	if err := dec.Decode(&invlists); err != nil {
 		return err
 	}
-	if err := dec.Decode(&ivf.IDs); err != nil {
+	if err := dec.Decode(&ids); err != nil {
 		return err
 	}
-	if err := dec.Decode(&ivf.Vectors); err != nil {
+	if err := dec.Decode(&vectors); err != nil {
 		return err
 	}
+
+	// Search indexes these slices by each other, so they must agree.
+	if len(invlists) != nCentroids {
+		return fmt.Errorf("IVF snapshot has %d inverted lists for %d centroids", len(invlists), nCentroids)
+	}
+	if len(vectors) != len(ids) {
+		return fmt.Errorf("IVF snapshot has %d vectors for %d ids", len(vectors), len(ids))
+	}
+	if trained {
+		if len(centroids) != nCentroids {
+			return fmt.Errorf("IVF snapshot has %d centroids, expected %d", len(centroids), nCentroids)
+		}
+		for i, c := range centroids {
+			if len(c) != dimension {
+				return fmt.Errorf("IVF snapshot centroid %d has dimension %d, expected %d", i, len(c), dimension)
+			}
+		}
+	}
+	for i, list := range invlists {
+		for _, idx := range list {
+			if idx < 0 || idx >= len(vectors) {
+				return fmt.Errorf("IVF snapshot list %d refers to vector %d of %d", i, idx, len(vectors))
+			}
+		}
+	}
+
+	ivf.NCentroids = nCentroids
+	ivf.Dimension = dimension
+	ivf.NProbe = nProbe
+	ivf.Trained = trained
+	ivf.Centroids = centroids
+	ivf.Invlists = invlists
+	ivf.IDs = ids
+	ivf.Vectors = vectors
 
 	return nil
 }
