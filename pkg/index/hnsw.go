@@ -262,15 +262,44 @@ func (h *HNSW) selectLevel() int {
 	return level
 }
 
+// liveNodeExistsLocked reports whether id is held by a node that has not been
+// deleted. A soft-deleted node does not count: it is dropped here, along with
+// every link to it, so the id can be inserted again, the way a store re-upserts
+// a row it deleted. Links have to go with it: left in place they would resolve
+// to the node about to be inserted, which would then find itself as its own
+// neighbour. The caller must hold h.mu.
+func (h *HNSW) liveNodeExistsLocked(id string) bool {
+	node, exists := h.Nodes[id]
+	if !exists {
+		return false
+	}
+	if !node.Deleted {
+		return true
+	}
+	delete(h.Nodes, id)
+	if h.EntryPoint == id {
+		h.EntryPoint = ""
+	}
+	for _, other := range h.Nodes {
+		for layer, links := range other.Neighbors {
+			kept := links[:0]
+			for _, to := range links {
+				if to != id {
+					kept = append(kept, to)
+				}
+			}
+			other.Neighbors[layer] = kept
+		}
+	}
+	return false
+}
+
 // Insert adds a new vector to the index
 func (h *HNSW) Insert(id string, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.mutations.Add(1)
 
-	if _, exists := h.Nodes[id]; exists {
-		return fmt.Errorf("node %s already exists", id)
-	}
 	if len(vector) == 0 {
 		return fmt.Errorf("vector for node %s is empty", id)
 	}
@@ -282,6 +311,12 @@ func (h *HNSW) Insert(id string, vector []float32) error {
 		h.Dim = len(vector)
 	} else if len(vector) != h.Dim {
 		return fmt.Errorf("vector for node %s has %d dimensions, index holds %d", id, len(vector), h.Dim)
+	}
+
+	// Last of the checks: it drops a deleted node, which must only happen
+	// when the insert goes ahead.
+	if h.liveNodeExistsLocked(id) {
+		return fmt.Errorf("node %s already exists", id)
 	}
 
 	// Prepare node data
@@ -773,7 +808,7 @@ func (h *HNSW) InsertBatch(vectors []struct {
 	h.mutations.Add(1)
 
 	for _, v := range vectors {
-		if _, exists := h.Nodes[v.ID]; exists {
+		if h.liveNodeExistsLocked(v.ID) {
 			continue // Skip duplicates
 		}
 
