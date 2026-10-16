@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.130.0] - 2026-10-16
+
+### Changed
+
+- Memory recall with an embedder fuses the semantic and keyword answers by
+  reciprocal rank, as knowledge search already did. The semantic list used to
+  fill topK first and the keyword list only what was left, so five vaguely
+  similar memories always beat an exact match. On a snapshot of the shared
+  brain: hit@5 0.771 → 0.792 on the golden set (MRR unchanged), and on 24
+  one-word queries the share of top-5 memories that contain the word went
+  from 0.30 to 0.85.
+- A query that is a single term (an acronym, a name, up to four Chinese
+  characters) is answered by the memories and knowledge chunks that contain
+  it first, with semantic hits filling the rest. Asking "HA" returned the
+  user's name and city; it now returns the memories about HA.
+
+### Fixed
+
+- Text with few spaces, such as Chinese, was cut into fixed-width windows
+  that started and ended mid-word and could leave a last chunk of a single
+  ")". Windows now end at a space or punctuation, and a short remainder
+  joins the last window. Documents saved before keep their chunks until
+  they are updated.
+- Knowledge hits with equal scores were ordered by id, so a document sorting
+  early in the alphabet won every tie. They keep the order retrieval gave
+  them.
+
 ## [2.129.3] - 2026-10-15
 
 ### Fixed
