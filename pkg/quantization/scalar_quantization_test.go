@@ -441,3 +441,30 @@ func TestBinaryQuantizerSearchSkipsMismatchedCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestScalarQuantizerTrainRejectsShortFirstVector(t *testing.T) {
+	sq, err := NewScalarQuantizer(4, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, vectors := range map[string][][]float32{
+		"short first": {{1}, {1, 2, 3, 4}},
+		"empty first": {{}, {1, 2, 3, 4}},
+		"short later": {{1, 2, 3, 4}, {1}},
+		"long first":  {{1, 2, 3, 4, 5}, {1, 2, 3, 4}},
+	} {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("%s: Train panicked: %v", name, r)
+				}
+			}()
+			if err := sq.Train(vectors); err == nil {
+				t.Errorf("%s: expected a dimension mismatch error", name)
+			}
+			if sq.Trained {
+				t.Errorf("%s: quantizer must stay untrained after a rejected Train", name)
+			}
+		}()
+	}
+}
