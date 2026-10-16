@@ -23,6 +23,9 @@ type ProductQuantizer struct {
 
 // NewProductQuantizer creates a new PQ instance
 func NewProductQuantizer(dimension, numSubspaces, numCentroids int) (*ProductQuantizer, error) {
+	if dimension <= 0 || numSubspaces <= 0 || numCentroids <= 0 {
+		return nil, fmt.Errorf("dimension, numSubspaces and numCentroids must be positive, got %d, %d, %d", dimension, numSubspaces, numCentroids)
+	}
 	if dimension%numSubspaces != 0 {
 		return nil, fmt.Errorf("dimension %d must be divisible by numSubspaces %d", dimension, numSubspaces)
 	}
@@ -44,6 +47,12 @@ func NewProductQuantizer(dimension, numSubspaces, numCentroids int) (*ProductQua
 func (pq *ProductQuantizer) Train(vectors [][]float32) error {
 	if len(vectors) < pq.K*pq.M {
 		return fmt.Errorf("need at least %d vectors for training, got %d", pq.K*pq.M, len(vectors))
+	}
+
+	for i, vec := range vectors {
+		if len(vec) != pq.D {
+			return fmt.Errorf("training vector %d has dimension %d, quantizer expects %d", i, len(vec), pq.D)
+		}
 	}
 
 	pq.TrainSize = len(vectors)
