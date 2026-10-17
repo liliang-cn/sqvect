@@ -7,10 +7,11 @@
 // Two things move on the page, and they arrive by different routes:
 //
 //   - Structure — nodes and relations appearing or disappearing. Found by
-//     polling the graph and diffing, because it can be written by any process
-//     sharing it and there is no change feed to subscribe to. Only the
-//     difference is sent, so the layout keeps every node that did not change
-//     exactly where it had settled.
+//     asking the store's change feed every couple of seconds whether any node
+//     or edge changed, and re-reading and diffing the graph only when one did
+//     (and once a minute regardless) — it can be written by any process
+//     sharing it. Only the difference is sent, so the layout keeps every node
+//     that did not change exactly where it had settled.
 //   - Activity — a query running, something being saved, a relation drawn.
 //     A query changes nothing in the graph, so no amount of polling can show
 //     one. These are reported by whoever handled the call, through

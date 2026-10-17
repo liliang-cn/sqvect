@@ -248,7 +248,6 @@ func remoteContract(addr, token string) func(context.Context) (ContractReport, e
 		if err != nil {
 			return ContractReport{}, fmt.Errorf("connect to %s: %w", addr, err)
 		}
-		defer func() { _ = conn.Close() }()
 
 		callCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()

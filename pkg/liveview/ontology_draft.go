@@ -511,7 +511,6 @@ func remoteDraft(addr, token string) func(context.Context, OntologyDraftQuery) (
 		if err != nil {
 			return OntologyDraftView{}, fmt.Errorf("connect to %s: %w", addr, err)
 		}
-		defer func() { _ = conn.Close() }()
 
 		callCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()

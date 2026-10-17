@@ -122,7 +122,6 @@ func remoteCaller(addr, token string) Caller {
 		if err != nil {
 			return nil, fmt.Errorf("connect to %s: %w", addr, err)
 		}
-		defer func() { _ = conn.Close() }()
 		resp, err := rpcv1.NewToolsServiceClient(conn).CallTool(ctx, &rpcv1.CallToolRequest{Name: tool, ArgsJson: string(args)})
 		if err != nil {
 			return nil, err

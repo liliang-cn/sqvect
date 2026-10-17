@@ -16,6 +16,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/rpc"
@@ -38,9 +39,35 @@ func RemoteConfigured() (addr, token string, ok bool) {
 	return addr, os.Getenv("CORTEXDB_GRPC_TOKEN"), addr != ""
 }
 
-// dial opens a connection to a shared brain, attaching the bearer token when
-// one is set.
+// dial returns the connection to a shared brain, opened on first use and kept,
+// attaching the bearer token when one is set.
 func dial(addr, token string) (*grpc.ClientConn, error) {
+	key := addr + "\x00" + token
+	connsMu.Lock()
+	defer connsMu.Unlock()
+	if c, ok := conns[key]; ok {
+		return c, nil
+	}
+	c, err := newConn(addr, token)
+	if err != nil {
+		return nil, err
+	}
+	conns[key] = c
+	return c, nil
+}
+
+// conns holds one connection per brain and token for the life of the process.
+// Every read used to dial its own and close it after one call; the live view
+// reads every couple of seconds and each panel fetches on its own, so a page
+// left open set up a new HTTP/2 connection — TLS handshake included when the
+// brain is behind one — several times a second. A ClientConn reconnects by
+// itself when the brain restarts or fails over, so one is all a process needs.
+var (
+	connsMu sync.Mutex
+	conns   = map[string]*grpc.ClientConn{}
+)
+
+func newConn(addr, token string) (*grpc.ClientConn, error) {
 	target, creds, err := rpc.Endpoint(addr)
 	if err != nil {
 		return nil, err
@@ -331,7 +358,6 @@ func LoadRemote(ctx context.Context, addr, token string, limit int, quiet bool) 
 	if err != nil {
 		return nil, nil, fmt.Errorf("connect to %s: %w", addr, err)
 	}
-	defer func() { _ = conn.Close() }()
 
 	args, err := json.Marshal(cortexdb.GraphListAllRequest{Limit: limit})
 	if err != nil {

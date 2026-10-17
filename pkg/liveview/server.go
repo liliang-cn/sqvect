@@ -58,6 +58,14 @@ type Source struct {
 	// no grade, so the colour-by-grade mode says it cannot be read here rather
 	// than painting the whole brain the untagged grey.
 	Grades bool
+	// Changes asks the store's change feed whether any node or edge changed
+	// after cursor, and returns the cursor for the next look; a negative
+	// cursor asks for the current head. The poller re-reads the graph only
+	// when it says something changed.
+	//
+	// Optional: nil, or an error (a brain older than the feed), means the
+	// poller re-reads on every tick, as it did before the feed existed.
+	Changes func(ctx context.Context, after int64) (cursor int64, changed bool, err error)
 	// ReadAsOf reads the graph as it stood at an instant, for the page pinned
 	// to a moment in the past.
 	//
@@ -148,6 +156,7 @@ func OpenSource(ctx context.Context) (*Source, error) {
 			return LoadLocal(ctx, db.SQL())
 		},
 		Grades:   true,
+		Changes:  localChanges(db),
 		ReadAsOf: localReadAsOf(db),
 		Record:   localRecord(db),
 		Contract: localContract(db),
@@ -175,7 +184,16 @@ type Server struct {
 	// started from inside the MCP server sees the calls too. The page says
 	// which, because a still ticker otherwise reads as a broken feature.
 	activity bool
+	// cursor is where the change feed was last read; -1 when the source has
+	// no feed or it has not answered yet.
+	cursor int64
 }
+
+// fullReadEvery bounds how stale the view can be when the feed says nothing
+// changed. A write the feed did not log — a store with its feed turned off —
+// still shows up within a minute, and on the shared brain one full read a
+// minute is a thirtieth of what polling every two seconds cost.
+const fullReadEvery = time.Minute
 
 // New reads the graph once, starts polling, and returns a view that serves
 // on a mux somebody else owns — see Handler.
@@ -204,6 +222,14 @@ func New(ctx context.Context, src *Source, interval time.Duration, activity bool
 		activity: activity,
 	}
 
+	// The feed's head is taken before the first read, so a change landing
+	// between the two is seen as a change rather than missed.
+	s.cursor = -1
+	if src.Changes != nil {
+		if c, _, err := src.Changes(ctx, -1); err == nil {
+			s.cursor = c
+		}
+	}
 	// One read before serving, so the first page load draws a graph instead of
 	// an empty scene that fills in a poll later.
 	if nodes, edges, rerr := src.Read(ctx); rerr == nil {
@@ -238,6 +264,7 @@ func New(ctx context.Context, src *Source, interval time.Duration, activity bool
 	mux.HandleFunc("/api/expand", s.handleExpand)
 	mux.HandleFunc("/api/ask", s.handleAsk)
 	mux.HandleFunc("/api/cypher", s.handleCypher)
+	mux.HandleFunc("/"+graph3dPath, handleGraph3D)
 	s.mux = mux
 
 	go s.poll(ctx)
@@ -247,7 +274,7 @@ func New(ctx context.Context, src *Source, interval time.Duration, activity bool
 // Handler is the view's routes, rooted at "/". Mount it wherever the page
 // should live; the pages' own links and fetches are relative, so a prefix
 // works as long as it ends in a slash and is stripped before this handler.
-func (s *Server) Handler() http.Handler { return s.mux }
+func (s *Server) Handler() http.Handler { return withGzip(s.mux) }
 
 // Start reads the graph once, starts serving on its own loopback listener,
 // and starts polling. It returns as soon as the URL is usable.
@@ -262,7 +289,7 @@ func Start(ctx context.Context, src *Source, port int, interval time.Duration, a
 	}
 	s.ln = ln
 	s.url = "http://" + ln.Addr().String()
-	s.http = &http.Server{Handler: s.mux, ReadHeaderTimeout: 10 * time.Second}
+	s.http = &http.Server{Handler: withGzip(s.mux), ReadHeaderTimeout: 10 * time.Second}
 
 	go func() {
 		if serr := s.http.Serve(ln); serr != nil && serr != http.ErrServerClosed {
@@ -338,13 +365,36 @@ func (s *Server) Close() error {
 func (s *Server) poll(ctx context.Context) {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
-	failing := false
+	failing, feedFailing := false, false
+	cursor, lastRead := s.cursor, time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+		if s.src.Changes != nil {
+			if cursor < 0 {
+				if c, _, err := s.src.Changes(ctx, -1); err == nil {
+					cursor = c
+				}
+			}
+			if cursor >= 0 {
+				next, changed, err := s.src.Changes(ctx, cursor)
+				switch {
+				case err == nil:
+					feedFailing = false
+					cursor = next
+					if !changed && time.Since(lastRead) < fullReadEvery {
+						continue
+					}
+				case !feedFailing:
+					fmt.Fprintf(os.Stderr, "cortexdb: live view: change feed: %v; re-reading on every tick\n", err)
+					feedFailing = true
+				}
+			}
+		}
+		lastRead = time.Now()
 		nodes, edges, err := s.src.Read(ctx)
 		if err != nil {
 			if !failing {

@@ -13,9 +13,9 @@ import (
 //
 // Two things move on the page, and they arrive by different routes:
 //
-//   - structure — nodes and edges appearing or disappearing. Found by polling
-//     the brain and diffing, because the graph can be written by any machine
-//     sharing it and there is no change feed to subscribe to.
+//   - structure — nodes and edges appearing or disappearing. The graph can be
+//     written by any machine sharing it; the poller asks the change feed
+//     whether anything did and re-reads and diffs only then (see changes.go).
 //   - activity — a query running, something being saved, a relation being
 //     drawn. Observed as it happens, from inside the MCP server that handles
 //     the call, so the view lights up on the same call the agent just made.

@@ -722,7 +722,6 @@ func remoteOntology(addr, token string) func(context.Context, OntologyQuery) (On
 		if err != nil {
 			return OntologyReport{}, fmt.Errorf("connect to %s: %w", addr, err)
 		}
-		defer func() { _ = conn.Close() }()
 
 		callCtx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()

@@ -21,19 +21,19 @@ import (
 //     yields the moment you drag, because a view that keeps spinning while
 //     someone is trying to look at one node is a view they have to fight.
 //
-// The bloom pass is loaded as an ES module from a CDN, pinned to the same three
-// revision the graph library bundles, and its failure is survivable: if it does
-// not arrive the scene still draws, still moves and still answers, only flatter.
-// Everything that makes the page *work* is in the classic script that runs
-// first, and everything in the module is decoration.
+// The graph, three and the bloom pass come from one bundle served by this
+// binary (assets.go), so the page holds one copy of three and draws without
+// the internet. The bloom pass is still set up last and its failure is still
+// survivable: the scene draws, moves and answers without it, only flatter.
 const pageTemplate = `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="space" data-mode="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#04060d">
+<meta name="theme-color" content="#f4f2ec">
+<link rel="icon" href="data:,">
 <title>CortexDB — live brain</title>
-<script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
+<script src="__GRAPH3D_SRC__"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%;overflow:hidden;background:#04060d;color:#c7d2e5;
@@ -728,7 +728,9 @@ var MODE_ORDER = ["auto", "light", "dark"];
 var THEME_KEY = "cortexdb.liveview.theme", MODE_KEY = "cortexdb.liveview.mode";
 function stored(key, ok){ try { var v = localStorage.getItem(key); if(v && ok(v)) return v; } catch(e){} return ""; }
 var themeName = (OPTS.theme && THEMES[OPTS.theme]) ? OPTS.theme : (stored(THEME_KEY, function(v){ return !!THEMES[v]; }) || "space");
-var modeSetting = MODE_ORDER.indexOf(OPTS.mode) >= 0 ? OPTS.mode : (stored(MODE_KEY, function(v){ return MODE_ORDER.indexOf(v) >= 0; }) || "auto");
+// Light unless someone chose otherwise: dark and "follow the system" are a
+// click away, but the page opens on a light background whatever the OS is set to.
+var modeSetting = MODE_ORDER.indexOf(OPTS.mode) >= 0 ? OPTS.mode : (stored(MODE_KEY, function(v){ return MODE_ORDER.indexOf(v) >= 0; }) || "light");
 var SYSTEM_DARK = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
 // The mode in force: auto follows the system, as an OS-level dark mode does.
 function effectiveMode(){
@@ -830,14 +832,22 @@ function keyOf(l){
 function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
   return {"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c];});}
 
+// The hover tooltips are HTML the graph library builds, so they take their
+// colours from the palette in force rather than from the stylesheet.
+function tipStyle(px, pad){
+  return T.light
+    ? "background:#fff;border:1px solid rgba(15,23,42,.14);border-radius:6px;padding:" + (pad-5) + "px " + pad + "px;" +
+      "font:" + px + "px system-ui;color:#0f172a;box-shadow:0 6px 18px -8px rgba(15,23,42,.3)"
+    : "background:#0a1120;border:1px solid #23324f;border-radius:6px;padding:" + (pad-5) + "px " + pad + "px;" +
+      "font:" + px + "px system-ui;color:#e2e8f0";
+}
 /* ---------- the scene ---------- */
 G = ForceGraph3D()(document.getElementById("scene"))
   .backgroundColor(BG)
   .showNavInfo(false)
   .nodeLabel(function(n){
-    return "<div style='background:#0a1120;border:1px solid #23324f;border-radius:6px;padding:4px 9px;" +
-      "font:12px system-ui;color:#e2e8f0'>" + esc(n.label) +
-      (n.type ? " <span style='color:#64748b'>" + esc(n.type) + "</span>" : "") + "</div>";
+    return "<div style='" + tipStyle(12, 9) + "'>" + esc(n.label) +
+      (n.type ? " <span style='color:" + (T.light ? "#64748b" : "#94a3b8") + "'>" + esc(n.type) + "</span>" : "") + "</div>";
   })
   .nodeColor(nodeColor)
   .nodeVal(nodeVal)
@@ -861,8 +871,7 @@ G = ForceGraph3D()(document.getElementById("scene"))
   // the only way to read one neighbourhood out of a few thousand nodes. Not on
   // a touch screen: there is no hover, and a tap opens the record instead.
   .onNodeHover(PHONE ? null : onHover)
-  .linkLabel(function(l){ return "<div style='background:#0a1120;border:1px solid #23324f;border-radius:6px;" +
-    "padding:3px 8px;font:11px system-ui;color:#bae6fd'>" + esc(l.label||"related") + "</div>"; })
+  .linkLabel(function(l){ return "<div style='" + tipStyle(11, 8) + "'>" + esc(l.label||"related") + "</div>"; })
   .linkVisibility(function(l){ return !edgeFilter || l.label === edgeFilter; })
   .onBackgroundClick(function(){ closeDetail(); });
 
@@ -884,12 +893,9 @@ G.d3Force("link").distance(34);
 // Degree drives size, so hubs are physically bigger and therefore bloom wider.
 function degreeOf(id){ return (adj[id]||[]).length; }
 function nodeVal(n){
+  // A flash swells the node too, but by scaling its mesh (see the flash
+  // timer), not through this accessor: setting it re-reads every node.
   var base = 0.7 + Math.min(7, degreeOf(n.id)*0.35);
-  var f = flash[n.id];
-  if(f){
-    var k = (f.until - Date.now())/f.span;      // 1 at the strike, 0 at the end
-    if(k>0) base *= 1 + 2.2*k*k;
-  }
   if(pathNodes[n.id]) base *= 1.5;
   else if(isDimmed(n)) base *= 0.6;
   return base;
@@ -1003,12 +1009,30 @@ function repaint(){
      .linkDirectionalParticles(linkParticles).linkDirectionalParticleColor(linkParticleColor);
   });
 }
-// Flashes decay, so the scene has to be repainted while any are alive — but
-// only while they are, not forever on a timer.
+// Flashes decay. Repainting through the accessors re-reads every node and
+// link — about 66 ms on a 2,000-node brain — and doing that every tick while
+// anything flashed held the page at half its frame rate whenever an agent was
+// busy. Only the swell changes from tick to tick, and that is one mesh's
+// scale; colour, particles and hot links change only when a flash or a hot
+// link starts or ends, so the accessors are re-read then and only then.
+var hotLive = 0;
+function flashScale(n, k){
+  // nodeVal sizes the sphere's radius by the cube root of its value; the swell
+  // was 1 + 2.2k² on the value.
+  var o = n && n.__threeObj;
+  if(o && o.scale) o.scale.setScalar(k > 0 ? Math.cbrt(1 + 2.2*k*k) : 1);
+}
 setInterval(function(){
-  var now = Date.now(), live = false;
-  for(var id in flash){ if(flash[id].until > now) live = true; else delete flash[id]; }
-  if(live) repaint();
+  var now = Date.now(), ended = false;
+  for(var id in flash){
+    var f = flash[id], k = (f.until - now)/f.span;   // 1 at the strike, 0 at the end
+    flashScale(byId[id], k);
+    if(k <= 0){ delete flash[id]; ended = true; }
+  }
+  var hot = 0, links = G.graphData().links;
+  for(var i = 0; i < links.length; i++) if(links[i].__hot && links[i].__hot > now) hot++;
+  if(hot !== hotLive){ hotLive = hot; ended = true; }
+  if(ended) repaint();
 }, 90);
 
 /* ---------- data ---------- */
@@ -1130,9 +1154,12 @@ function rebuildLegend(nodes){
     if(!seen[t]){seen[t]=true;types.push(t);} });
   types.sort();
   var sel = document.getElementById("type"), keep = sel.value;
-  sel.innerHTML = "<option value=''>All types</option>" + types.map(function(t){
+  sel.innerHTML = "<option value=''>All types</option>" +
+    (typeCounts.memory ? "<option value='!memory'>All but memories</option>" : "") +
+    types.map(function(t){
     return "<option value='" + esc(t) + "'>" + esc(t) + "</option>"; }).join("");
   sel.value = keep;
+  if(sel.value !== keep){ sel.value = ""; applyVisibility(); }
   drawLegend(types);
 }
 
@@ -1684,10 +1711,26 @@ window.addEventListener("message", function(ev){
   query = q.trim().toLowerCase();
   repaint();
 });
-document.getElementById("type").addEventListener("change", function(){
-  var t = this.value;
-  G.nodeVisibility(function(n){ return !t || (n.type||"(untyped)") === t; });
-});
+// What is shown is the type filter and the relation filter together, set in
+// one place so neither undoes the other. A type value of "!type" hides that
+// type and keeps the rest: memories are most of a brain's nodes — 906 of 2,000
+// on the shared one — and hiding them is how the entities and projects
+// between them come into view. A link is shown only when both its ends are.
+function typeShown(n){
+  var t = document.getElementById("type").value;
+  if(!t) return true;
+  var ty = n ? (n.type||"(untyped)") : "";
+  return t.charAt(0) === "!" ? ty !== t.slice(1) : ty === t;
+}
+function applyVisibility(){
+  G.nodeVisibility(typeShown);
+  G.linkVisibility(function(l){
+    if(edgeFilter && l.label !== edgeFilter) return false;
+    var e = endsOf(l);
+    return typeShown(byId[e[0]]) && typeShown(byId[e[1]]);
+  });
+}
+document.getElementById("type").addEventListener("change", applyVisibility);
 document.getElementById("fit").addEventListener("click", function(){ fitCore(700); });
 
 // fitCore frames the graph, not its outliers.
@@ -2287,7 +2330,7 @@ function refreshRelations(){
 }
 document.getElementById("etype").addEventListener("change", function(){
   edgeFilter = this.value;
-  G.linkVisibility(function(l){ return !edgeFilter || l.label === edgeFilter; });
+  applyVisibility();
 });
 
 /* The Explore bar. */
@@ -2540,7 +2583,7 @@ var labelEls = {};
 var LABEL_MAX = PHONE ? 14 : 36, HUB_LABELS = PHONE ? 0 : 10;
 function labelTargets(){
   var want = {}, out = [];
-  function add(id, cls){ if(byId[id] && !want[id] && out.length < LABEL_MAX){ want[id] = cls; out.push(id); } }
+  function add(id, cls){ if(byId[id] && typeShown(byId[id]) && !want[id] && out.length < LABEL_MAX){ want[id] = cls; out.push(id); } }
   if(selectedId) add(selectedId, "sel");
   if(hoverSet) Object.keys(hoverSet).forEach(function(id){ if(id !== "__id") add(id, ""); });
   else if(hlCount){
@@ -2549,8 +2592,39 @@ function labelTargets(){
     Object.keys(pathNodes).forEach(function(id){ add(id, ""); });
   } else {
     hubIds().slice(0, HUB_LABELS).forEach(function(id){ add(id, "hub"); });
+    // Then whatever the camera has come close to. From afar that is nothing
+    // and the scene carries the hubs' names alone; zoomed into a
+    // neighbourhood, its nodes are drawn large and take their names, largest
+    // first, as many as fit without overlapping.
+    if(!PHONE) nearIds().forEach(function(id){ add(id, ""); });
   }
   return {ids: out, cls: want};
+}
+// A node is named once its sphere is drawn at least this many pixels across
+// the radius.
+var NEAR_PX = 7, nearCache = {at:0, ids:[]};
+function nearIds(){
+  var now = Date.now();
+  if(now - nearCache.at < 200) return nearCache.ids;
+  var cam = G.camera(), d = cam.getWorldDirection(cam.position.clone());
+  var focal = (window.innerHeight / 2) / Math.tan(cam.fov * Math.PI / 360);
+  var cx = cam.position.x, cy = cam.position.y, cz = cam.position.z, found = [];
+  var w = window.innerWidth, h = window.innerHeight;
+  G.graphData().nodes.forEach(function(n){
+    if(typeof n.x !== "number" || !typeShown(n)) return;
+    var along = (n.x-cx)*d.x + (n.y-cy)*d.y + (n.z-cz)*d.z;
+    if(along <= 1) return;
+    var px = Math.cbrt(nodeVal(n)) * 4 * focal / along;   // nodeRelSize is the default, 4
+    if(px < NEAR_PX) return;
+    // Only what is on screen competes: the largest spheres are often the ones
+    // so close they are mostly out of frame, and they would take every slot.
+    var p = G.graph2ScreenCoords(n.x, n.y, n.z);
+    if(p.x < 0 || p.y < 0 || p.x > w || p.y > h) return;
+    found.push([px, n.id]);
+  });
+  found.sort(function(a, b){ return b[0] - a[0]; });
+  nearCache = {at: now, ids: found.slice(0, LABEL_MAX).map(function(x){ return x[1]; })};
+  return nearCache.ids;
 }
 var hubCache = {at:0, ids:[]};
 function hubIds(){
@@ -2718,51 +2792,43 @@ window.addEventListener("resize", placeExplore);
 placeExplore();
 </script>
 
-<script type="importmap">
-{"imports":{
-  "three":"https://unpkg.com/three@0.168.0/build/three.module.js",
-  "three/addons/":"https://unpkg.com/three@0.168.0/examples/jsm/"
-}}
-</script>
-<script type="module">
-// Glow. Pinned to the same three revision the graph library bundles, so the
-// pass and the composer agree on what a render target is. Everything here is
-// decoration: if the import fails the page above has already drawn itself.
-try {
-  const { UnrealBloomPass } = await import("three/addons/postprocessing/UnrealBloomPass.js");
-  const { Vector2 } = await import("three");
-  // Tuned down hard from the defaults. At full strength with a low threshold
-  // every node blooms, the halos merge, and the background lifts to the colour
-  // of whatever is most common — the picture goes to fog and the type colours
-  // stop being readable. A high threshold means only what is genuinely bright
-  // glows: the hubs, and whatever the brain just touched.
-  // Sized to the container, not the window: this page is embedded, and its
-  // frame is routinely a fraction of the window it sits in.
-  const scene = document.getElementById("scene");
-  const bloom = new UnrealBloomPass(
-    new Vector2(scene.clientWidth || window.innerWidth, scene.clientHeight || window.innerHeight),
-    T.glow || 0.85, 0.45, 0.32);
-  const composer = G.postProcessingComposer();
-  composer.addPass(bloom);
-  // Handed to the resize path above, which runs in the classic script and
-  // cannot see this module's scope.
-  window.__bloom = bloom;
-  fitToContainer();
-  const btn = document.getElementById("glow");
-  syncGlow();
-  btn.addEventListener("click", () => {
-    glowOn = !glowOn;
+<script>
+// Glow. The bloom pass comes from the same bundle as the graph, built against
+// the one three in it, so the pass and the composer agree on what a render
+// target is. Everything here is decoration: if it fails the page above has
+// already drawn itself.
+(function(){
+  var btn = document.getElementById("glow");
+  try {
+    var lib = window.CortexDBGraph3D;
+    // Tuned down hard from the defaults. At full strength with a low threshold
+    // every node blooms, the halos merge, and the background lifts to the colour
+    // of whatever is most common — the picture goes to fog and the type colours
+    // stop being readable. A high threshold means only what is genuinely bright
+    // glows: the hubs, and whatever the brain just touched.
+    // Sized to the container, not the window: this page is embedded, and its
+    // frame is routinely a fraction of the window it sits in.
+    var scene = document.getElementById("scene");
+    var bloom = new lib.UnrealBloomPass(
+      new lib.Vector2(scene.clientWidth || window.innerWidth, scene.clientHeight || window.innerHeight),
+      T.glow || 0.85, 0.45, 0.32);
+    G.postProcessingComposer().addPass(bloom);
+    window.__bloom = bloom;
+    fitToContainer();
     syncGlow();
-  });
-} catch (err) {
-  // Offline, or a CDN that will not serve modules. Say so on the button rather
-  // than leaving one that looks enabled and does nothing.
-  const btn = document.getElementById("glow");
-  btn.classList.remove("on");
-  btn.textContent = "No glow";
-  btn.disabled = true;
-  btn.title = String(err);
-}
+    btn.addEventListener("click", function(){
+      glowOn = !glowOn;
+      syncGlow();
+    });
+  } catch (err) {
+    // Say so on the button rather than leaving one that looks enabled and
+    // does nothing.
+    btn.classList.remove("on");
+    btn.textContent = "No glow";
+    btn.disabled = true;
+    btn.title = String(err);
+  }
+})();
 </script>
 </body>
 </html>`
@@ -2798,6 +2864,7 @@ func buildPageHTML() string {
 		"__GRADE_PALETTE__":  must(gradePalette),
 		"__GRADE_UNTAGGED__": must(GradeColorUntagged),
 		"__GRADE_UNKNOWN__":  must(GradeColorUnknown),
+		"__GRAPH3D_SRC__":    graph3dPath,
 	} {
 		if !strings.Contains(out, token) {
 			panic("cortexdb/liveview: the page has no " + token + " to fill in")

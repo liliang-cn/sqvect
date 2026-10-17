@@ -23,6 +23,7 @@ func SourceFor(db *cortexdb.DB, describe string) *Source {
 			return LoadLocal(ctx, handle)
 		},
 		Grades:   true,
+		Changes:  localChanges(db),
 		ReadAsOf: localReadAsOf(db),
 		Record:   localRecord(db),
 		Contract: localContract(db),
@@ -49,6 +50,7 @@ func RemoteSource(addr, token string) *Source {
 		Read: func(ctx context.Context) ([]Node, []Edge, error) {
 			return LoadRemote(ctx, addr, token, 0, true)
 		},
+		Changes:  remoteChanges(addr, token),
 		Record:   callerRecord(call),
 		Call:     call,
 		Contract: remoteContract(addr, token),
