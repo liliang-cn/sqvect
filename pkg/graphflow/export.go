@@ -249,38 +249,45 @@ const htmlVisualization = `<!DOCTYPE html>
 // node on click, and supports text search + type filtering. Same base64
 // GRAPH_JSON_PLACEHOLDER contract as the 2D template.
 const htmlVisualization3D = `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-mode="light">
 <head>
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>CortexDB GraphFlow 3D Visualization</title>
 	<script src="https://unpkg.com/3d-force-graph@1.73.4/dist/3d-force-graph.min.js"></script>
 	<style>
+		/* Light by default; dark is the button in the toolbar, remembered per browser. */
+		:root{--bg:#f4f2ec;--ink:#0f172a;--ink2:#334155;--mute:#64748b;--panel:rgba(255,255,255,.9);--line:rgba(15,23,42,.12);
+			--field:#fff;--btn:#e2e8f0;--btnh:#cbd5e1;--shadow:0 12px 32px -16px rgba(15,23,42,.3)}
+		[data-mode="dark"]{--bg:#06080f;--ink:#e2e8f0;--ink2:#cbd5e1;--mute:#64748b;--panel:rgba(13,20,36,.92);--line:#1e293b;
+			--field:#0b1120;--btn:#1e293b;--btnh:#334155;--shadow:none}
 		*{box-sizing:border-box;margin:0;padding:0}
-		html,body{height:100%;background:#06080f;color:#cbd5e1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden}
+		html,body{height:100%;background:var(--bg);color:var(--ink2);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden}
 		#graph{position:absolute;inset:0}
-		#toolbar{position:fixed;top:12px;left:12px;z-index:10;display:flex;flex-direction:column;gap:8px;background:rgba(13,20,36,.92);padding:12px;border:1px solid #1e293b;border-radius:8px;min-width:210px;backdrop-filter:blur(6px)}
-		#toolbar h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;margin-bottom:2px}
-		#toolbar input,#toolbar select{padding:6px 9px;border:1px solid #334155;border-radius:5px;font-size:13px;width:100%;background:#0b1120;color:#e2e8f0}
-		#toolbar button{padding:6px 10px;border:none;border-radius:5px;cursor:pointer;font-size:12px;background:#1e293b;color:#cbd5e1}
-		#toolbar button:hover{background:#334155}
-		#stats{font-size:11px;color:#64748b}
-		#legend{position:fixed;bottom:12px;left:12px;z-index:10;background:rgba(13,20,36,.92);border:1px solid #1e293b;padding:10px 12px;border-radius:8px;font-size:11px;max-height:42vh;overflow:auto;backdrop-filter:blur(6px)}
-		#legend b{display:block;margin-bottom:6px;color:#94a3b8}
+		.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;backdrop-filter:blur(6px);box-shadow:var(--shadow)}
+		#toolbar{position:fixed;top:12px;left:12px;z-index:10;display:flex;flex-direction:column;gap:8px;padding:12px;min-width:210px}
+		#toolbar h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute);margin-bottom:2px}
+		#toolbar input,#toolbar select{padding:6px 9px;border:1px solid var(--line);border-radius:5px;font-size:13px;width:100%;background:var(--field);color:var(--ink)}
+		#toolbar button{padding:6px 10px;border:none;border-radius:5px;cursor:pointer;font-size:12px;background:var(--btn);color:var(--ink2)}
+		#toolbar button:hover{background:var(--btnh)}
+		#toolbar button.on{background:#4f46e5;color:#fff}
+		#stats{font-size:11px;color:var(--mute)}
+		#legend{position:fixed;bottom:12px;left:12px;z-index:10;padding:10px 12px;font-size:11px;max-height:42vh;overflow:auto}
+		#legend b{display:block;margin-bottom:6px;color:var(--mute)}
 		.li{display:flex;align-items:center;gap:8px;margin-bottom:3px}
 		.dot{width:11px;height:11px;border-radius:3px;flex:none}
-		#detail{position:fixed;top:12px;right:12px;z-index:10;width:300px;background:rgba(13,20,36,.95);border:1px solid #1e293b;border-radius:8px;padding:12px;display:none;backdrop-filter:blur(6px)}
+		#detail{position:fixed;top:12px;right:12px;z-index:10;width:300px;padding:12px;display:none}
 		#detail.on{display:block}
-		#detail .t{font-size:14px;font-weight:600;color:#e2e8f0;word-break:break-word}
+		#detail .t{font-size:14px;font-weight:600;color:var(--ink);word-break:break-word}
 		#detail .row{margin-top:8px}
-		#detail .k{font-size:10px;text-transform:uppercase;color:#64748b}
-		#detail .v{font-size:12px;color:#cbd5e1;word-break:break-word}
-		#detail .x{float:right;cursor:pointer;color:#64748b;font-size:18px;line-height:14px}
+		#detail .k{font-size:10px;text-transform:uppercase;color:var(--mute)}
+		#detail .v{font-size:12px;color:var(--ink2);word-break:break-word}
+		#detail .x{float:right;cursor:pointer;color:var(--mute);font-size:18px;line-height:14px}
 	</style>
 </head>
 <body>
 	<div id="graph"></div>
-	<div id="toolbar">
+	<div id="toolbar" class="card">
 		<h3>Search</h3>
 		<input id="search" placeholder="Highlight nodes…" autocomplete="off">
 		<h3>Type</h3>
@@ -288,11 +295,12 @@ const htmlVisualization3D = `<!DOCTYPE html>
 		<div style="display:flex;gap:6px">
 			<button onclick="GF.zoomToFit(600)">Fit</button>
 			<button id="spin">Spin</button>
+			<button id="mode">Dark</button>
 		</div>
 		<div id="stats"></div>
 	</div>
-	<div id="legend"><b>Node types</b><div id="legend-items"></div></div>
-	<div id="detail"><span class="x" onclick="closeDetail()">&times;</span><div class="t" id="d-title"></div><div id="d-body"></div></div>
+	<div id="legend" class="card"><b>Node types</b><div id="legend-items"></div></div>
+	<div id="detail" class="card"><span class="x" onclick="closeDetail()">&times;</span><div class="t" id="d-title"></div><div id="d-body"></div></div>
 	<script>
 		// atob yields a Latin-1 byte string; decode as UTF-8 so non-ASCII labels survive.
 		var DATA=JSON.parse(new TextDecoder('utf-8').decode(Uint8Array.from(atob('GRAPH_JSON_PLACEHOLDER'),function(c){return c.charCodeAt(0)})));
@@ -304,14 +312,19 @@ const htmlVisualization3D = `<!DOCTYPE html>
 		var links=(DATA.edges||[]).filter(function(e){return ids[e.source]&&ids[e.target];}).map(function(e){return {source:e.source,target:e.target,relation:e.relation||'',confidence:e.confidence||''};});
 		var deg={};links.forEach(function(l){deg[l.source]=(deg[l.source]||0)+1;deg[l.target]=(deg[l.target]||0)+1;});
 		var hi='';
+		var MODE=(function(){try{return localStorage.getItem('cortexdb.graphflow3d.mode')==='dark'?'dark':'light';}catch(e){return 'light';}})();
+		var PAL={light:{bg:'#f4f2ec',link:'#a3b0c2',dim:'#e2e0d9',tipBg:'#fff',tipInk:'#0f172a',tipLine:'rgba(15,23,42,.14)'},
+			dark:{bg:'#06080f',link:'#334155',dim:'#1e293b',tipBg:'#0d1424',tipInk:'#e2e8f0',tipLine:'#334155'}};
+		function P(){return PAL[MODE];}
+		document.documentElement.setAttribute('data-mode',MODE);
 		var GF=ForceGraph3D()(document.getElementById('graph'))
-			.backgroundColor('#06080f')
+			.backgroundColor(P().bg)
 			.graphData({nodes:nodes,links:links})
-			.nodeLabel(function(n){return '<div style="background:#0d1424;color:#e2e8f0;padding:4px 8px;border-radius:5px;border:1px solid #334155;font-size:12px">'+escapeHTML(n.label)+(n.type?' <span style=\"color:#64748b\">·'+escapeHTML(n.type)+'</span>':'')+'</div>';})
-			.nodeColor(function(n){if(hi){return (matches(n,hi)?colorOf(n.type):'#1e293b');}return colorOf(n.type);})
+			.nodeLabel(function(n){return '<div style="background:'+P().tipBg+';color:'+P().tipInk+';padding:4px 8px;border-radius:5px;border:1px solid '+P().tipLine+';font-size:12px">'+escapeHTML(n.label)+(n.type?' <span style=\"color:#64748b\">·'+escapeHTML(n.type)+'</span>':'')+'</div>';})
+			.nodeColor(function(n){if(hi){return (matches(n,hi)?colorOf(n.type):P().dim);}return colorOf(n.type);})
 			.nodeVal(function(n){return 1+Math.min(8,(deg[n.id]||0)*0.5);})
 			.nodeOpacity(0.92)
-			.linkColor(function(){return '#334155';})
+			.linkColor(function(){return P().link;})
 			.linkWidth(0.4)
 			.linkDirectionalArrowLength(2.2)
 			.linkDirectionalArrowRelPos(1)
@@ -331,9 +344,15 @@ const htmlVisualization3D = `<!DOCTYPE html>
 		// search highlight
 		document.getElementById('search').addEventListener('input',function(){hi=this.value.toLowerCase();GF.nodeColor(GF.nodeColor());});
 		function matches(n,q){return (n.label&&n.label.toLowerCase().indexOf(q)>=0)||(n.id&&n.id.toLowerCase().indexOf(q)>=0);}
+		// light / dark
+		var modeBtn=document.getElementById('mode');
+		function syncMode(){document.documentElement.setAttribute('data-mode',MODE);modeBtn.textContent=MODE==='dark'?'Light':'Dark';
+			GF.backgroundColor(P().bg).linkColor(GF.linkColor()).nodeColor(GF.nodeColor());}
+		modeBtn.addEventListener('click',function(){MODE=MODE==='dark'?'light':'dark';try{localStorage.setItem('cortexdb.graphflow3d.mode',MODE);}catch(e){}syncMode();});
+		syncMode();
 		// spin toggle
 		var spinning=false,angle=0,timer=null;
-		document.getElementById('spin').addEventListener('click',function(){spinning=!spinning;this.style.background=spinning?'#4f46e5':'';if(spinning){var dist=GF.cameraPosition().z||500;timer=setInterval(function(){angle+=Math.PI/600;GF.cameraPosition({x:dist*Math.sin(angle),z:dist*Math.cos(angle)});},30);}else{clearInterval(timer);}});
+		document.getElementById('spin').addEventListener('click',function(){spinning=!spinning;this.classList.toggle('on',spinning);if(spinning){var dist=GF.cameraPosition().z||500;timer=setInterval(function(){angle+=Math.PI/600;GF.cameraPosition({x:dist*Math.sin(angle),z:dist*Math.cos(angle)});},30);}else{clearInterval(timer);}});
 		function showDetail(n){document.getElementById('d-title').textContent=n.label;var h='';h+=row('Type',n.type);h+=row('ID',n.id);if(n.summary)h+=row('Summary',n.summary);if(n.source)h+=row('Source',n.source);h+=row('Connections',String(deg[n.id]||0));document.getElementById('d-body').innerHTML=h;document.getElementById('detail').classList.add('on');}
 		function row(k,v){return v?'<div class="row"><div class="k">'+escapeHTML(k)+'</div><div class="v">'+escapeHTML(v)+'</div></div>':'';}
 		function closeDetail(){document.getElementById('detail').classList.remove('on');}
