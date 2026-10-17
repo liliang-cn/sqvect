@@ -27,6 +27,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -116,6 +118,12 @@ type RecordDetail struct {
 	// the temporal release does. It is not _at: _at is when the producer made
 	// the record, and the two differ whenever anything is backdated.
 	ValidFrom string `json:"valid_from,omitempty"`
+
+	// Memory is the memory a memory node stands for, read in full. The graph
+	// node holds a clipped summary to label the scene with; this is what was
+	// saved. Nil for every other kind of record, and for a memory the store no
+	// longer holds.
+	Memory *MemoryDetail `json:"memory,omitempty"`
 
 	// Contradicts names the records this one cannot both-be-true with. Kept
 	// readable rather than resolved into content, because they are ids and
@@ -211,6 +219,12 @@ func localRecord(db *cortexdb.DB) func(context.Context, string) (RecordDetail, e
 		}
 
 		readContractKeys(&out, props)
+
+		if mid, ok := memoryNodeID(out.Type, id); ok && !out.Edge {
+			if resp, err := db.GetMemory(ctx, cortexdb.MemoryGetRequest{MemoryID: mid}); err == nil {
+				out.Memory = memoryDetailFrom(resp.Memory)
+			}
+		}
 
 		if out.Edge {
 			// FactProvenanceFor is edge-shaped on purpose: a fact is a
@@ -447,4 +461,87 @@ func rfc3339OrEmpty(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// MemoryDetail is one memory as the inspector shows it.
+type MemoryDetail struct {
+	ID         string  `json:"id"`
+	Content    string  `json:"content"`
+	Scope      string  `json:"scope,omitempty"`
+	Namespace  string  `json:"namespace,omitempty"`
+	UserID     string  `json:"user_id,omitempty"`
+	CreatedAt  string  `json:"created_at,omitempty"`
+	Importance float64 `json:"importance,omitempty"`
+	// Facts are the memory's metadata a person can read, in a fixed order
+	// for the keys every memory tends to carry and then the rest by name.
+	Facts []MemoryFact `json:"facts,omitempty"`
+}
+
+// MemoryFact is one metadata key and its value as text.
+type MemoryFact struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+// memoryNodeID returns the memory id a graph node stands for: memory nodes
+// are the memory's id under "memory:".
+func memoryNodeID(nodeType, id string) (string, bool) {
+	if !strings.HasPrefix(id, "memory:") {
+		return "", false
+	}
+	if nodeType != "" && nodeType != "memory" {
+		return "", false
+	}
+	return strings.TrimPrefix(id, "memory:"), true
+}
+
+// memoryFactOrder puts the keys most memories carry first.
+var memoryFactOrder = []string{"type", "project", "topic", "date", "source", "model", "session",
+	"recall_count", "last_recalled_at", "superseded_by", "superseded_at"}
+
+// memoryFactSkip is metadata that is either shown elsewhere in the panel or
+// bookkeeping nobody reads: agentgo is a JSON blob of its own.
+var memoryFactSkip = map[string]bool{"agentgo": true, "kind": true, "scope": true, "namespace": true,
+	"importance": true, "ttl_seconds": true}
+
+func memoryDetailFrom(m cortexdb.MemoryRecord) *MemoryDetail {
+	d := &MemoryDetail{ID: m.ID, Content: m.Content, Scope: m.Scope, Namespace: m.Namespace,
+		UserID: m.UserID, Importance: m.Importance}
+	if !m.CreatedAt.IsZero() {
+		d.CreatedAt = m.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	text := func(v any) (string, bool) {
+		switch x := v.(type) {
+		case string:
+			x = strings.TrimSpace(x)
+			return x, x != ""
+		case float64:
+			return strconv.FormatFloat(x, 'f', -1, 64), true
+		case int, int64, bool:
+			return fmt.Sprint(x), true
+		}
+		return "", false
+	}
+	seen := map[string]bool{}
+	add := func(k string) {
+		if seen[k] || memoryFactSkip[k] || len(d.Facts) >= 14 {
+			return
+		}
+		seen[k] = true
+		if v, ok := text(m.Metadata[k]); ok {
+			d.Facts = append(d.Facts, MemoryFact{Key: k, Value: clipRunes(v, 200)})
+		}
+	}
+	for _, k := range memoryFactOrder {
+		add(k)
+	}
+	rest := make([]string, 0, len(m.Metadata))
+	for k := range m.Metadata {
+		rest = append(rest, k)
+	}
+	sort.Strings(rest)
+	for _, k := range rest {
+		add(k)
+	}
+	return d
 }

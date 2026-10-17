@@ -496,6 +496,16 @@ const pageTemplate = `<!DOCTYPE html>
   [data-mode="light"] .dot{box-shadow:none}
   [data-mode="light"] .badge .led{box-shadow:none}
   [data-mode="light"] #detail .quote{background:#f1f5f9;color:#334155;border-left-color:rgba(15,118,110,.4)}
+  @media (min-width:761px){ #detail.wide{width:440px} }
+  #detail .quote.mem{font:13px/1.65 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#dbe4f0;
+    white-space:pre-wrap;word-break:break-word;max-height:44vh;overflow:auto}
+  [data-mode="light"] #detail .quote.mem{color:#0f172a;background:#f8fafc}
+  #detail .quote.mem{white-space:normal}
+  #detail .quote.mem .mh{font-weight:600;margin:8px 0 2px}
+  #detail .quote.mem .ml{padding-left:14px;position:relative}
+  #detail .quote.mem .ml:before{content:"•";position:absolute;left:3px;opacity:.6}
+  #detail .quote.mem .mg{height:6px}
+  #detail .quote.mem code{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;padding:0 3px;border-radius:3px;background:rgba(148,163,184,.16)}
   [data-mode="light"] #detail .quote .qm,[data-mode="light"] #detail .foot,[data-mode="light"] #contract .foot{color:#94a3b8}
   [data-mode="light"] #detail .say,[data-mode="light"] #contract .say,[data-mode="light"] #cnote,
   [data-mode="light"] #asofnote,[data-mode="light"] #pathinfo{color:#475569}
@@ -1525,6 +1535,7 @@ function openInspector(id, title, isEdge, node){
     (isEdge ? "#93c5fd" : colorOf(node.type)) + "'>" + esc(chipType) + "</span><br>" : "") + esc(title || id);
   document.getElementById("db").innerHTML = localRows(id, isEdge, node) +
     "<div class='say'>Reading the record…</div>";
+  document.getElementById("detail").classList.remove("wide");
   document.getElementById("detail").classList.add("on");
   if(!sourceRecords){
     document.getElementById("db").innerHTML = localRows(id, isEdge, node) +
@@ -1540,6 +1551,8 @@ function openInspector(id, title, isEdge, node){
     .then(function(rep){
       if(gen !== inspectGen) return;   // the reader has moved on
       document.getElementById("db").innerHTML = localRows(id, isEdge, node) + recordRows(rep);
+      // A memory is read rather than glanced at: give it a wider column.
+      document.getElementById("detail").classList.toggle("wide", !!(rep && rep.memory));
     })
     .catch(function(err){
       if(gen !== inspectGen) return;
@@ -1574,6 +1587,22 @@ function localRows(id, isEdge, node){
   return rows;
 }
 
+// mdLite renders the little Markdown memories are written in — headings,
+// bullets, bold, inline code — and nothing else. Everything is escaped first,
+// so the formatting is added to text that can no longer carry markup.
+function mdLite(src){
+  var inline = function(t){
+    return t.replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>")
+            .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+  };
+  return String(src||"").split("\n").map(function(line){
+    var e = esc(line), h = /^(#{1,4})\s+(.*)$/.exec(e), li = /^\s*[-*]\s+(.*)$/.exec(e);
+    if(h) return "<div class='mh'>" + inline(h[2]) + "</div>";
+    if(li) return "<div class='ml'>" + inline(li[1]) + "</div>";
+    return e.trim() ? "<div>" + inline(e) + "</div>" : "<div class='mg'></div>";
+  }).join("");
+}
+
 // recordRows is what the store said.
 function recordRows(rep){
   if(!rep || !rep.available){
@@ -1588,6 +1617,17 @@ function recordRows(rep){
       "it was on screen and is not on the shelf.</div>";
   }
   var html = "";
+  // A memory node is labelled with a clipped summary; what the reader came for
+  // is what was saved, so that goes first, whole, with when and where.
+  if(rep.memory){
+    var m = rep.memory;
+    html += "<div class='sub'>Memory</div><div class='quote mem'>" + mdLite(m.content) + "</div>";
+    html += dtext("Saved", m.created_at ? m.created_at.replace("T", " ").replace("Z", " UTC") : "");
+    html += dtext("Scope", [m.scope, m.namespace && m.namespace !== "default" ? m.namespace : "", m.user_id].filter(Boolean).join(" · "));
+    if(m.importance) html += dtext("Importance", String(m.importance));
+    (m.facts||[]).forEach(function(f){ html += dtext(f.key.replace(/_/g, " "), f.value); });
+    html += "<div class='sub'>Record</div>";
+  }
   // The grade first and in its own colour: it is the answer to the question
   // that brought the reader here, and a word in a list of words is not.
   var g = rep.grade || "";

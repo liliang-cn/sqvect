@@ -65,6 +65,7 @@ var ExploreTools = []string{
 	"knowledge_memory_recall",
 	"get_chunks",
 	"fact_provenance",
+	"memory_get",
 }
 
 // Caller runs one of the brain's tools with JSON arguments and returns its
@@ -543,6 +544,12 @@ func callerRecord(call Caller) func(context.Context, string) (RecordDetail, erro
 				}
 			}
 			callerRecordChunks(ctx, call, &out)
+			if mid, ok := memoryNodeID(out.Type, id); ok {
+				var mem cortexdb.MemoryGetResponse
+				if err := callInto(ctx, call, "memory_get", cortexdb.MemoryGetRequest{MemoryID: mid}, &mem); err == nil && mem.Memory.ID != "" {
+					out.Memory = memoryDetailFrom(mem.Memory)
+				}
+			}
 			return out, nil
 		}
 
