@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.131.0] - 2026-10-17
+
+### Changed
+
+- The live graph view re-reads the graph only when the change feed says a
+  node or edge changed, and once a minute regardless. It used to pull the
+  whole graph every two seconds over a fresh connection: on the shared brain
+  (2,000 nodes, 5,600 edges) that is about a second of server time a read,
+  and one open page held the brain at 35% of a core on a two-core host. With
+  the page open it now sits at 7%, against 6% with no page. A brain without
+  changes_since is read on every tick, as before.
+- Every call the view makes to a shared brain goes over one kept connection
+  instead of dialing per call.
+- The view loads 3d-force-graph, three and the bloom pass as one bundle
+  embedded in the binary, gzipped and cached for good. The page used to load
+  two copies of three from unpkg, and drew nothing offline.
+- Pages and JSON are gzipped: the graph goes from 755 KB to 112 KB, the page
+  from 141 KB to 47 KB. The event stream is left uncompressed.
+- A flash animates the node's mesh instead of re-setting every accessor on
+  every node and link every 90 ms. With twenty nodes flashing the page held
+  30 fps and spent 1.75 s of every 3 s in long tasks; it now holds its full
+  frame rate with none.
+- The view and the GraphFlow 3D export open light. Dark and follow-the-system
+  are one click away and remembered.
+
+### Added
+
+- Nodes are named as the camera comes close: a sphere drawn at least 7 px
+  across gets its label, largest first, without overlaps. Zoomed into a
+  neighbourhood of the shared brain that is 30 names where there were 3.
+- The type filter has "All but memories" (`?type=!memory`): memories are 906
+  of the shared brain's 2,000 nodes, and hiding them shows the entities and
+  projects between them.
+
 ## [2.130.1] - 2026-10-16
 
 ### Fixed
