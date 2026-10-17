@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.132.0] - 2026-10-17
+
+### Added
+
+- In the live graph view, clicking a memory node opens the whole memory: its
+  text, rendered with the headings, bullets, bold and code it was written in,
+  when it was saved, its scope and importance, and its metadata (type,
+  project, topic, recall count and the rest). The node itself is labelled
+  with a clipped summary; until now the panel showed only that. Works on a
+  local database and on a shared brain, where it reads through memory_get,
+  which is added to the view's read-only tool list. The panel widens for a
+  memory.
+
 ## [2.131.0] - 2026-10-17
 
 ### Changed
