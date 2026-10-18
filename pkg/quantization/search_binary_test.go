@@ -12,7 +12,7 @@ func TestSearchBinarySortsLargeDatabaseInOrder(t *testing.T) {
 	const n = 60000
 	db := make([][]byte, n)
 	for i := range db {
-		db[i] = []byte{byte(i % 9 / 1)} // few distinct distances, many ties
+		db[i] = []byte{byte(i % 9)} // few distinct distances, many ties
 	}
 	start := time.Now()
 	idx, dist := bq.SearchBinary([]byte{0}, db, n)
