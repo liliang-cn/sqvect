@@ -140,13 +140,6 @@ func (db *DB) expandGraphChunkNeighborhoods(ctx context.Context, chunkResults ma
 
 			score := nextScores[neighborID]
 			switch summary.NodeType {
-			case "entity":
-				// An entity that no chunk of this collection mentions is not
-				// this collection's to know about, nor to walk through.
-				if !entityKnownIn(summary.Collections, opts.Collection) {
-					continue
-				}
-				entitySet[summary.Content] = struct{}{}
 			case "chunk":
 				if _, ok := inScope[neighborID]; !ok {
 					continue
@@ -164,6 +157,18 @@ func (db *DB) expandGraphChunkNeighborhoods(ctx context.Context, chunkResults ma
 				} else if relatedScore > existing.Score {
 					existing.Score = relatedScore
 					existing.BaseScore = relatedScore
+				}
+			case "document":
+			default:
+				// An entity, whatever its type: "entity" when the extractor named
+				// it, or an ontology type such as "organization". One that no
+				// chunk of this collection mentions is not this collection's to
+				// know about, nor to walk through.
+				if !entityKnownIn(summary.Collections, opts.Collection) {
+					continue
+				}
+				if summary.NodeType == "entity" {
+					entitySet[summary.Content] = struct{}{}
 				}
 			}
 
