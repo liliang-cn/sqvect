@@ -194,7 +194,12 @@ func bodyFieldLookup(w http.ResponseWriter, r *http.Request) (authz.FieldLookup,
 	}
 	return func(field string) (string, []string, bool) {
 		top, _ := fields[field].(string)
-		return top, nestedValues(fields, field, nestedScanDepth), true
+		nested := nestedValues(fields, field, nestedScanDepth)
+		// encoding/json matches keys to struct fields case-insensitively, so
+		// {"user_id":"a","USER_ID":"b"} is accepted by the handler and may
+		// resolve to either copy. Any other spelling of the field is held to
+		// the confinement exactly as a nested copy is.
+		return top, append(nested, otherSpellings(fields, field)...), true
 	}, true
 }
 
@@ -220,6 +225,21 @@ func bufferBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	return body, true
+}
+
+// otherSpellings returns the non-empty string values an object carries under
+// a case variant of field, excluding the exact spelling itself.
+func otherSpellings(obj map[string]any, field string) []string {
+	var out []string
+	for k, v := range obj {
+		if k == field || !strings.EqualFold(k, field) {
+			continue
+		}
+		if s, _ := v.(string); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // nestedValues collects non-empty values of a scope field from everything
@@ -251,6 +271,7 @@ func valuesIn(v any, field string, depth int) []string {
 		if s, _ := t[field].(string); s != "" {
 			out = append(out, s)
 		}
+		out = append(out, otherSpellings(t, field)...)
 		return append(out, nestedValues(t, field, depth-1)...)
 	case []any:
 		var out []string
