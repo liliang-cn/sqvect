@@ -10,6 +10,7 @@ import (
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 	"github.com/liliang-cn/cortexdb/v2/pkg/graph"
+	"github.com/liliang-cn/cortexdb/v2/pkg/sqldialect"
 )
 
 type knowledgeMutationInput struct {
@@ -32,7 +33,43 @@ type knowledgeMutationPlan struct {
 	embeddings []*core.Embedding
 	graphOps   *graph.BatchGraphOperation
 	ingest     knowledgeIngestResult
+	dedupe     *contentLookup
 }
+
+// knowledgeRetire says what a write takes out of what is stored before it
+// writes, in the same transaction.
+type knowledgeRetire int
+
+const (
+	// retireNothing: a first write. Every row is inserted under its id.
+	retireNothing knowledgeRetire = iota
+	// retireChunks: ingest_document over an existing document. Chunk i is
+	// upserted in place;
+	// only the chunk rows and chunk nodes past the new text's end go, with
+	// the edges that hang off them (has_chunk, next, mentions). The
+	// document node, the entities and the relation edges stay: the caller
+	// attached them, and the text does not unsay them.
+	retireChunks
+	// retireGraph: knowledge_save and knowledge_update over an existing
+	// document, whatever they change. The document's whole graph is retired
+	// and rebuilt from the text and the request's entities and relations, as
+	// on main.
+	retireGraph
+)
+
+// contentLookup is a dedupe check to run inside the write transaction: a
+// document of the collection, other than the one being written, that holds
+// this content stops the write with duplicateContent.
+type contentLookup struct {
+	hash       string
+	collection string
+}
+
+// duplicateContent is what applyKnowledgeMutation returns when the lookup
+// found a holder. Nothing was written; the ingest reports duplicate_of.
+type duplicateContent struct{ holder string }
+
+func (e duplicateContent) Error() string { return "content already stored as " + e.holder }
 
 func (db *DB) buildKnowledgeMutationPlan(ctx context.Context, input knowledgeMutationInput) (*knowledgeMutationPlan, error) {
 	if input.KnowledgeID == "" {
@@ -207,6 +244,11 @@ func buildKnowledgeChunkArtifacts(input knowledgeMutationInput, collection strin
 			"document_id": input.KnowledgeID,
 			"title":       input.Title,
 		},
+	}
+	// The content hash is a property of the node as well as of the record,
+	// where ingest_document also puts it and where dedupe looks it up.
+	if hash := input.Metadata[contentHashKey]; hash != "" {
+		docNode.Properties[contentHashKey] = hash
 	}
 
 	embeddings := make([]*core.Embedding, 0, len(chunks))
@@ -717,17 +759,31 @@ func (db *DB) validateKnowledgeRelationInputs(ctx context.Context, relations []T
 	})
 }
 
-func (db *DB) applyKnowledgeMutation(ctx context.Context, knowledgeID string, replace bool, plan *knowledgeMutationPlan) error {
+func (db *DB) applyKnowledgeMutation(ctx context.Context, knowledgeID string, retire knowledgeRetire, plan *knowledgeMutationPlan) error {
 	tx, err := db.store.GetDB().BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin knowledge mutation transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// The lookup runs once the transaction holds the write lock (SQLite
+	// queues the writers of a process, core/sqlite_writelock.go; PostgreSQL
+	// takes an advisory lock on the hash), so two ingests of the same content
+	// that race cannot both find nothing: the second sees the first's commit.
+	if plan.dedupe != nil {
+		holder, err := db.contentHolderTx(ctx, tx, plan.dedupe.hash, knowledgeID, plan.dedupe.collection)
+		if err != nil {
+			return err
+		}
+		if holder != "" {
+			return duplicateContent{holder: holder}
+		}
+	}
+
 	oldChunkRefs := make([]*core.Embedding, 0)
 	oldChunkIDs := make([]string, 0)
 	deletedNodeIDs := make([]string, 0)
-	if replace {
+	if retire != retireNothing {
 		oldChunkRefs, err = db.knowledgeChunkRefsTx(ctx, tx, knowledgeID)
 		if err != nil {
 			return err
@@ -735,11 +791,20 @@ func (db *DB) applyKnowledgeMutation(ctx context.Context, knowledgeID string, re
 		for _, chunk := range oldChunkRefs {
 			oldChunkIDs = append(oldChunkIDs, chunk.ID)
 		}
-		deletedNodeIDs, err = db.cleanupKnowledgeGraphArtifactsTx(ctx, tx, knowledgeID, oldChunkRefs)
+		if retire == retireGraph {
+			deletedNodeIDs, err = db.cleanupKnowledgeGraphArtifactsTx(ctx, tx, knowledgeID, oldChunkRefs)
+		} else {
+			// Other text: chunk i of the new text is chunk i of the old one,
+			// upserted in place with the graph attached to it, as on main.
+			// Only the chunks past the new text's end are retired, with
+			// the edges that hang off them, so none of them is served again.
+			oldChunkIDs = staleChunkIDs(oldChunkIDs, plan.embeddings)
+			deletedNodeIDs, err = db.retireChunkNodesTx(ctx, tx, oldChunkIDs)
+		}
 		if err != nil {
 			return err
 		}
-		if _, err := db.txExec(ctx, tx, `DELETE FROM embeddings WHERE doc_id = ?`, knowledgeID); err != nil {
+		if err := deleteStringIDsTx(ctx, db.Dialect(), tx, "embeddings", "id", oldChunkIDs); err != nil {
 			return fmt.Errorf("delete prior knowledge chunks: %w", err)
 		}
 	}
@@ -766,6 +831,38 @@ func (db *DB) applyKnowledgeMutation(ctx context.Context, knowledgeID string, re
 	db.store.SyncUpsertedEmbeddings(ctx, plan.embeddings)
 	db.graph.SyncUpsertedNodes(ctx, plan.graphOps.NodeUpserts)
 	return nil
+}
+
+// contentHolderQuery is the dedupe lookup: its hash expression is the one
+// idx_documents_content_sha256 indexes on both stores.
+func (db *DB) contentHolderQuery() string {
+	return `
+		SELECT MIN(d.id) FROM documents d
+		WHERE ` + db.Dialect().JSONTextGuarded("d.metadata", contentHashKey) + ` = ?
+		  AND d.id <> ?
+		  AND EXISTS (SELECT 1 FROM embeddings e JOIN collections c ON c.id = e.collection_id WHERE e.doc_id = d.id AND c.name = ?)
+	`
+}
+
+// contentHolderTx names a document of the collection, other than exceptID,
+// whose record carries this content hash, or "" when none does. It reads
+// every holder (a sixteen-row cap missed the copy in this collection behind
+// sixteen in another) and answers the smallest id, so the answer does not
+// depend on the order the rows come in. On PostgreSQL the hash is locked for
+// the transaction first, which is what makes two racing ingests wait for
+// each other there.
+func (db *DB) contentHolderTx(ctx context.Context, tx *sql.Tx, hash, exceptID, collection string) (string, error) {
+	if db.Dialect().Kind() == sqldialect.Postgres {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, hash); err != nil {
+			return "", fmt.Errorf("lock content hash: %w", err)
+		}
+	}
+	var holder sql.NullString
+	err := db.querierQueryRow(ctx, tx, db.contentHolderQuery(), hash, exceptID, collection).Scan(&holder)
+	if err != nil {
+		return "", fmt.Errorf("look up content hash: %w", err)
+	}
+	return holder.String, nil
 }
 
 func (db *DB) upsertKnowledgeDocumentRecordTx(ctx context.Context, tx *sql.Tx, doc *core.Document) error {
@@ -828,4 +925,20 @@ func firstBatchError(result *graph.BatchResult) error {
 		}
 	}
 	return fmt.Errorf("graph batch had %d failed operations", result.FailedCount)
+}
+
+// staleChunkIDs is the chunk ids of the previous text that the new text does
+// not write again.
+func staleChunkIDs(previous []string, next []*core.Embedding) []string {
+	kept := make(map[string]struct{}, len(next))
+	for _, e := range next {
+		kept[e.ID] = struct{}{}
+	}
+	stale := make([]string, 0, len(previous))
+	for _, id := range previous {
+		if _, ok := kept[id]; !ok {
+			stale = append(stale, id)
+		}
+	}
+	return stale
 }

@@ -146,6 +146,11 @@ func (s *SQLiteStore) createTables(ctx context.Context) error {
 		FOREIGN KEY (doc_id) REFERENCES documents(id) ON DELETE CASCADE
 	);
 
+	-- The dedupe lookup of ingest_document (pkg/cortexdb/knowledge_tx.go)
+	-- selects the documents that carry metadata _content_sha256; this is its
+	-- expression, indexed.
+	CREATE INDEX IF NOT EXISTS idx_documents_content_sha256 ON documents ((CASE WHEN json_valid(metadata) = 1 THEN json_extract(metadata, '$._content_sha256') ELSE NULL END));
+
 	CREATE INDEX IF NOT EXISTS idx_embeddings_collection_id ON embeddings(collection_id);
 	CREATE INDEX IF NOT EXISTS idx_embeddings_doc_id ON embeddings(doc_id);
 	CREATE INDEX IF NOT EXISTS idx_embeddings_created_at ON embeddings(created_at);

@@ -190,6 +190,14 @@ func plausibleLatinEntity(match string) bool {
 	return strings.TrimSpace(match) != ""
 }
 
+// resolvedIngestOptions is the collection and chunking a write will use once
+// the defaults are applied.
+func resolvedIngestOptions(collection string, chunkSize, chunkOverlap int) GraphRAGIngestOptions {
+	opts := GraphRAGIngestOptions{Collection: collection, ChunkSize: chunkSize, ChunkOverlap: chunkOverlap}
+	applyGraphRAGIngestDefaults(&opts)
+	return opts
+}
+
 func applyGraphRAGIngestDefaults(opts *GraphRAGIngestOptions) {
 	if opts.Collection == "" {
 		opts.Collection = defaultGraphRAGCollection

@@ -3,6 +3,7 @@ package cortexdb
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -243,6 +244,9 @@ func (db *DB) InsertGraphDocument(ctx context.Context, doc GraphRAGDocument, opt
 			"title":       doc.Title,
 		}
 		for k, v := range doc.Metadata {
+			if slices.Contains(EngineDocumentKeys(), k) {
+				continue
+			}
 			metadata[k] = v
 		}
 

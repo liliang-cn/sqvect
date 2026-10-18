@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+
+	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 )
 
 // The toolbox a confined key may use, one rule per tool, written out by hand.
@@ -105,6 +108,11 @@ type toolRule struct {
 	// most: the tool reads one and ignores the other, and the guard must
 	// read the one the tool reads.
 	oneOf []string
+	// rewritten is true for a tool whose facade writes the engine's own
+	// document keys (cortexdb.EngineDocumentKeys) over the caller's: a
+	// document read back and sent again carries them, and they are not
+	// refused under their exact spelling.
+	rewritten bool
 }
 
 // Argument fragments shared by several tools.
@@ -177,11 +185,11 @@ func paths(lists ...[]string) []string {
 // confinedTools is the allowlist.
 var confinedTools = map[string]toolRule{
 	// Knowledge: one collection, named at the top level.
-	"ingest_document": {scope: collectionScope, stores: storeKnowledge,
-		args: docArgs, ids: []idField{{"document_id", idKnowledge}}},
-	"knowledge_save": {scope: collectionScope, stores: storeKnowledge,
+	"ingest_document": {scope: collectionScope, stores: storeKnowledge, rewritten: true,
+		args: paths(docArgs, []string{"dedupe"}), ids: []idField{{"document_id", idKnowledge}}},
+	"knowledge_save": {scope: collectionScope, stores: storeKnowledge, rewritten: true,
 		args: docArgs, ids: []idField{{"knowledge_id", idKnowledge}}, denied: graphDenied},
-	"knowledge_update": {scope: collectionScope, stores: storeKnowledge,
+	"knowledge_update": {scope: collectionScope, stores: storeKnowledge, rewritten: true,
 		args: docArgs, ids: []idField{{"knowledge_id", idKnowledge}}, denied: graphDenied},
 	"knowledge_search": {scope: collectionScope, stores: storeKnowledge,
 		args: paths(queryArgs, walkArgs, planArgs, pprArgs, []string{"top_k", "diversity_lambda"})},
@@ -473,11 +481,15 @@ func (r toolRule) checkPaths(obj map[string]any) error {
 // reserves by a leading "_", and a document's metadata takes none of the
 // keys the engine writes on every chunk. A filter map (filters.*, filter.*)
 // reads, so it may name an engine key: that is how a curator lists what
-// waits.
+// waits. A tool whose facade rewrites the engine's document keys takes them
+// back under their exact spelling.
 func (r toolRule) checkOpenKeys(path string, v any) error {
 	obj, _ := v.(map[string]any)
 	meta := path == "metadata"
 	for key := range obj {
+		if meta && r.rewritten && slices.Contains(cortexdb.EngineDocumentKeys(), key) {
+			continue
+		}
 		lower := strings.ToLower(key)
 		if meta && strings.HasPrefix(lower, "_") {
 			return fmt.Errorf("takes no %s.%s from a confined key: a key that starts with _ is the engine's", path, lower)

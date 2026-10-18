@@ -55,6 +55,11 @@ type ToolIngestDocumentRequest struct {
 	ChunkSize    int               `json:"chunk_size,omitempty"`
 	ChunkOverlap int               `json:"chunk_overlap,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
+	// Dedupe refuses to store the same content twice under two ids of one
+	// collection: when another document of the collection already holds this
+	// exact content, nothing is written and the response names it in
+	// DuplicateOf.
+	Dedupe bool `json:"dedupe,omitempty"`
 }
 
 // ToolIngestDocumentResponse summarizes lexical ingestion output.
@@ -62,6 +67,15 @@ type ToolIngestDocumentResponse struct {
 	DocumentNodeID string   `json:"document_node_id"`
 	ChunkNodeIDs   []string `json:"chunk_node_ids"`
 	Collection     string   `json:"collection"`
+	// ContentSHA256 is the hex SHA-256 of the content, also kept on the
+	// document as metadata _content_sha256.
+	ContentSHA256 string `json:"content_sha256"`
+	// Unchanged reports a re-ingest identical to what is stored: nothing was
+	// rewritten, the ids are the existing ones.
+	Unchanged bool `json:"unchanged,omitempty"`
+	// DuplicateOf names the document that already holds this content when
+	// Dedupe was asked for; nothing was written.
+	DuplicateOf string `json:"duplicate_of,omitempty"`
 }
 
 // ToolEntityInput represents an extracted entity and where it was mentioned.

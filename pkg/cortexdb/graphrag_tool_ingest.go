@@ -2,7 +2,12 @@ package cortexdb
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
@@ -29,6 +34,63 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 		return nil, fmt.Errorf("init graph schema: %w", err)
 	}
 
+	// The content's hash travels with the document (metadata _content_sha256,
+	// also a property of its node) so the two questions a sync job asks can be
+	// answered without re-reading anything: has this document changed since it
+	// was stored, and is this content already stored under another id. The
+	// chunking travels with it too, so "unchanged" can mean the stored chunks
+	// are the ones this request would make.
+	metadata := cloneStringMap(req.Metadata)
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
+	stampIngestMarks(metadata, req.Content, ingestOpts)
+	contentHash := metadata[contentHashKey]
+
+	existing, err := t.db.store.GetDocument(ctx, req.DocumentID)
+	if err != nil && !errors.Is(err, core.ErrNotFound) {
+		return nil, fmt.Errorf("get existing document: %w", err)
+	}
+	// Content that is not blank splits into at least one chunk.
+	chunks := splitGraphRAGText(req.Content, ingestOpts.ChunkSize, ingestOpts.ChunkOverlap)
+
+	// A re-ingest upserts the record, the document node and the chunks under
+	// their ids: chunk i of the new text is chunk i of the old one, as on
+	// main, and the graph the caller attached to it (entities, mention
+	// edges, relations) stays. Only the chunks past the new text's end are
+	// retired, with their nodes and the edges that hang off them, so none of
+	// them is served again. The same text keeps every chunk. And when the
+	// request says exactly what the record says, and the chunk rows and the
+	// graph nodes are all there, nothing is written: the sync job that
+	// re-ingests every followed source on every pass must not rewrite every
+	// unchanged document, and "unchanged" must not be said of a document
+	// whose graph delete_document_graph took away, which main rebuilds.
+	retire := retireNothing
+	if existing != nil {
+		retire = retireChunks
+		if sameIngest(existing, req, metadata) {
+			chunkIDs, storedIn, err := t.db.storedChunks(ctx, req.DocumentID)
+			if err != nil {
+				return nil, err
+			}
+			if storedIn == ingestOpts.Collection && len(chunkIDs) == len(chunks) {
+				present, err := t.db.graphNodesPresent(ctx, append([]string{graphDocumentNodeID(req.DocumentID)}, chunkIDs...))
+				if err != nil {
+					return nil, err
+				}
+				if present {
+					return &ToolIngestDocumentResponse{
+						DocumentNodeID: graphDocumentNodeID(req.DocumentID),
+						ChunkNodeIDs:   chunkIDs,
+						Collection:     ingestOpts.Collection,
+						ContentSHA256:  contentHash,
+						Unchanged:      true,
+					}, nil
+				}
+			}
+		}
+	}
+
 	vectorDim, err := t.lexicalVectorDim(ctx, ingestOpts.Collection)
 	if err != nil {
 		return nil, err
@@ -37,27 +99,26 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 		return nil, err
 	}
 
-	chunks := splitGraphRAGText(req.Content, ingestOpts.ChunkSize, ingestOpts.ChunkOverlap)
-	if len(chunks) == 0 {
-		return nil, ErrEmptyText
-	}
-
 	// The record carries what the caller said about the document, not only
 	// its text: a search hit reports Title, SourceURL, Author and Metadata
 	// from this record (knowledge_helpers.go), so a document ingested here
 	// without them answered every question with no provenance. The same
 	// fields are what knowledge_save keeps, so both ingest paths now agree.
-	docRecord := &core.Document{
-		ID:        req.DocumentID,
-		Title:     req.Title,
-		Content:   req.Content,
-		SourceURL: req.SourceURL,
-		Author:    req.Author,
-		Version:   1,
-		Metadata:  stringMapToAnyMap(req.Metadata),
+	version := 1
+	if existing != nil {
+		version = existing.Version + 1
 	}
-	if err := t.db.upsertGraphRAGDocumentRecord(ctx, docRecord); err != nil {
-		return nil, err
+	plan := &knowledgeMutationPlan{
+		document: &core.Document{
+			ID:        req.DocumentID,
+			Title:     req.Title,
+			Content:   req.Content,
+			SourceURL: req.SourceURL,
+			Author:    req.Author,
+			Version:   version,
+			Metadata:  stringMapToAnyMap(metadata),
+		},
+		graphOps: &graph.BatchGraphOperation{},
 	}
 
 	docNodeID := graphDocumentNodeID(req.DocumentID)
@@ -65,7 +126,7 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 	// query can select documents by source or by any metadata key. The
 	// caller's keys cannot displace the two the graph relies on.
 	docProps := map[string]interface{}{}
-	for k, v := range req.Metadata {
+	for k, v := range metadata {
 		docProps[k] = v
 	}
 	if req.SourceURL != "" {
@@ -76,46 +137,39 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 	}
 	docProps["document_id"] = req.DocumentID
 	docProps["title"] = req.Title
-	docNode := &graph.GraphNode{
+	plan.graphOps.NodeUpserts = append(plan.graphOps.NodeUpserts, &graph.GraphNode{
 		ID:         docNodeID,
 		Vector:     lexicalVectorForText(firstNonEmpty(req.Title, req.Content), vectorDim),
 		Content:    firstNonEmpty(req.Title, req.Content),
 		NodeType:   "document",
 		Properties: docProps,
-	}
-	if err := t.db.graph.UpsertNode(ctx, docNode); err != nil {
-		return nil, fmt.Errorf("upsert document node: %w", err)
-	}
+	})
 
-	embeddings := make([]*core.Embedding, 0, len(chunks))
-	chunkNodes := make([]*graph.GraphNode, 0, len(chunks))
-	edges := make([]*graph.GraphEdge, 0, len(chunks)*2)
 	chunkIDs := make([]string, 0, len(chunks))
-
 	for i, chunk := range chunks {
 		chunkID := graphChunkNodeID(req.DocumentID, i)
 		chunkIDs = append(chunkIDs, chunkID)
 
-		metadata := map[string]string{
+		chunkMetadata := map[string]string{
 			"graph_kind":  "chunk",
 			"document_id": req.DocumentID,
 			"chunk_index": fmt.Sprintf("%d", i),
 			"title":       req.Title,
 		}
-		for k, v := range req.Metadata {
-			metadata[k] = v
+		for k, v := range metadata {
+			chunkMetadata[k] = v
 		}
 
 		chunkVector := lexicalVectorForText(chunk, vectorDim)
-		embeddings = append(embeddings, &core.Embedding{
+		plan.embeddings = append(plan.embeddings, &core.Embedding{
 			ID:         chunkID,
 			Collection: ingestOpts.Collection,
 			Vector:     chunkVector,
 			Content:    chunk,
 			DocID:      req.DocumentID,
-			Metadata:   metadata,
+			Metadata:   chunkMetadata,
 		})
-		chunkNodes = append(chunkNodes, &graph.GraphNode{
+		plan.graphOps.NodeUpserts = append(plan.graphOps.NodeUpserts, &graph.GraphNode{
 			ID:       chunkID,
 			Vector:   chunkVector,
 			Content:  chunk,
@@ -126,7 +180,7 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 				"title":       req.Title,
 			},
 		})
-		edges = append(edges, &graph.GraphEdge{
+		plan.graphOps.EdgeUpserts = append(plan.graphOps.EdgeUpserts, &graph.GraphEdge{
 			ID:         fmt.Sprintf("edge:doc_chunk:%s:%d", req.DocumentID, i),
 			FromNodeID: docNodeID,
 			ToNodeID:   chunkID,
@@ -134,7 +188,7 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 			Weight:     1.0,
 		})
 		if i > 0 {
-			edges = append(edges, &graph.GraphEdge{
+			plan.graphOps.EdgeUpserts = append(plan.graphOps.EdgeUpserts, &graph.GraphEdge{
 				ID:         fmt.Sprintf("edge:chunk_next:%s:%d", req.DocumentID, i),
 				FromNodeID: graphChunkNodeID(req.DocumentID, i-1),
 				ToNodeID:   chunkID,
@@ -144,32 +198,129 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 		}
 	}
 
-	if err := t.db.store.UpsertBatch(ctx, embeddings); err != nil {
-		return nil, fmt.Errorf("upsert lexical chunks: %w", err)
+	// Record, chunks, nodes and edges land in one transaction, the one
+	// knowledge_save uses, so a failure half-way leaves nothing behind. The
+	// dedupe lookup runs in that transaction too, once the write lock is
+	// held, so two ingests of the same content that race store one copy.
+	if req.Dedupe {
+		plan.dedupe = &contentLookup{hash: contentHash, collection: ingestOpts.Collection}
 	}
-	// Both batches report rejected rows in their result rather than in err. The
-	// result used to be discarded here, so an ingest whose every edge was rejected
-	// still returned the chunk ids and reported success.
-	chunkNodeResult, err := t.db.graph.UpsertNodesBatch(ctx, chunkNodes)
-	if err != nil {
-		return nil, fmt.Errorf("upsert chunk nodes: %w", err)
-	}
-	if err := chunkNodeResult.Err(); err != nil {
-		return nil, fmt.Errorf("upsert chunk nodes: %w", err)
-	}
-	edgeResult, err := t.db.graph.UpsertEdgesBatch(ctx, edges)
-	if err != nil {
-		return nil, fmt.Errorf("upsert chunk edges: %w", err)
-	}
-	if err := edgeResult.Err(); err != nil {
-		return nil, fmt.Errorf("upsert chunk edges: %w", err)
+	if err := t.db.applyKnowledgeMutation(ctx, req.DocumentID, retire, plan); err != nil {
+		var dup duplicateContent
+		if errors.As(err, &dup) {
+			// Nothing is stored, so no chunk: an empty list, not null.
+			return &ToolIngestDocumentResponse{
+				ChunkNodeIDs:  []string{},
+				Collection:    ingestOpts.Collection,
+				ContentSHA256: contentHash,
+				DuplicateOf:   dup.holder,
+			}, nil
+		}
+		return nil, err
 	}
 
 	return &ToolIngestDocumentResponse{
 		DocumentNodeID: docNodeID,
 		ChunkNodeIDs:   chunkIDs,
 		Collection:     ingestOpts.Collection,
+		ContentSHA256:  contentHash,
 	}, nil
+}
+
+// The marks every write path leaves on a document's metadata (record, node
+// and chunks): the content's hash, and the chunking the chunks were made
+// with. Together with the record's own fields they say whether a re-ingest
+// would store what is already there. Their names start with "_", the
+// prefix importflow gives its own _table: the keys are the engine's. A
+// caller's chunk_size or content_sha256 is the caller's and is stored as
+// given, and a caller's copy of a mark is dropped before the mark is set.
+const (
+	contentHashKey  = "_content_sha256"
+	chunkSizeKey    = "_chunk_size"
+	chunkOverlapKey = "_chunk_overlap"
+)
+
+// EngineDocumentKeys are the metadata keys the facade rewrites on every
+// write of a document's metadata (ingest_document, SaveKnowledge,
+// UpdateKnowledge): the marks of its content and its chunking. A caller's
+// copy of them is replaced, or dropped by InsertGraphDocument, which writes
+// no mark, so the allowlist lets a document read back be sent again with
+// them. Other engine keys, such as importflow's _table, are
+// not rewritten and are not listed.
+func EngineDocumentKeys() []string {
+	return []string{contentHashKey, chunkSizeKey, chunkOverlapKey}
+}
+
+func contentSHA256(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
+// stampIngestMarks writes the hash of content and the resolved chunking into
+// metadata. Every path that (re)builds a document's chunks calls it, so the
+// three keys always describe the chunks that are stored, whatever a caller
+// put under their names.
+func stampIngestMarks(metadata map[string]string, content string, opts GraphRAGIngestOptions) {
+	metadata[contentHashKey] = contentSHA256(content)
+	metadata[chunkSizeKey] = strconv.Itoa(opts.ChunkSize)
+	metadata[chunkOverlapKey] = strconv.Itoa(opts.ChunkOverlap)
+}
+
+// graphNodesPresent reports whether every one of ids is a live graph node.
+func (db *DB) graphNodesPresent(ctx context.Context, ids []string) (bool, error) {
+	nodes, err := db.graph.GetNodesBatch(ctx, ids)
+	if err != nil {
+		return false, fmt.Errorf("check the graph nodes of the document: %w", err)
+	}
+	return len(nodes) == len(ids), nil
+}
+
+// sameIngest reports whether a stored document already says everything this
+// request says: same title, source, author and metadata, the marks included,
+// so the same content (by hash) chunked the same way. Then the request has
+// nothing to change.
+func sameIngest(existing *core.Document, req ToolIngestDocumentRequest, metadata map[string]string) bool {
+	if existing.Title != req.Title || existing.SourceURL != req.SourceURL || existing.Author != req.Author {
+		return false
+	}
+	stored := anyMapToStringMap(existing.Metadata)
+	if len(stored) != len(metadata) {
+		return false
+	}
+	for k, v := range metadata {
+		if stored[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// storedChunks lists a stored document's chunk ids in chunk order, and the
+// collection they sit in. The order is by the chunk_index each chunk
+// carries, not by the text of the ids, whose three-digit padding runs out at
+// the thousandth chunk. A document with no chunks sits in no collection.
+func (db *DB) storedChunks(ctx context.Context, documentID string) ([]string, string, error) {
+	chunks, err := db.store.GetByDocID(ctx, documentID)
+	if err != nil {
+		return nil, "", fmt.Errorf("list chunks of %s: %w", documentID, err)
+	}
+	sort.Slice(chunks, func(i, j int) bool {
+		a, _ := strconv.Atoi(chunks[i].Metadata["chunk_index"])
+		b, _ := strconv.Atoi(chunks[j].Metadata["chunk_index"])
+		return a < b
+	})
+	ids := make([]string, 0, len(chunks))
+	for _, c := range chunks {
+		ids = append(ids, c.ID)
+	}
+	if len(chunks) == 0 {
+		return ids, "", nil
+	}
+	first, err := db.store.GetByID(ctx, chunks[0].ID)
+	if err != nil {
+		return nil, "", fmt.Errorf("find collection of %s: %w", documentID, err)
+	}
+	return ids, first.Collection, nil
 }
 
 // UpsertEntities writes entity nodes and mention edges for caller-supplied structured extraction.

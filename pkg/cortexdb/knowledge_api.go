@@ -32,10 +32,11 @@ func (db *DB) SaveKnowledge(ctx context.Context, req KnowledgeSaveRequest) (*Kno
 	}
 
 	metadata := cloneStringMap(req.Metadata)
-	if metadata == nil && writerOf(ctx) != "" {
+	if metadata == nil {
 		metadata = map[string]string{}
 	}
 	stampWriter(ctx, metadata, plainString)
+	stampIngestMarks(metadata, req.Content, resolvedIngestOptions(req.Collection, req.ChunkSize, req.ChunkOverlap))
 	version := 1
 	if existing != nil {
 		version = existing.Version + 1
@@ -58,7 +59,11 @@ func (db *DB) SaveKnowledge(ctx context.Context, req KnowledgeSaveRequest) (*Kno
 	if err != nil {
 		return nil, err
 	}
-	if err := db.applyKnowledgeMutation(ctx, req.KnowledgeID, existing != nil, plan); err != nil {
+	retire := retireNothing
+	if existing != nil {
+		retire = retireGraph
+	}
+	if err := db.applyKnowledgeMutation(ctx, req.KnowledgeID, retire, plan); err != nil {
 		return nil, err
 	}
 
@@ -134,6 +139,12 @@ func (db *DB) UpdateKnowledge(ctx context.Context, req KnowledgeUpdateRequest) (
 	replaceArtifacts := req.Content != nil || req.Title != nil || req.Collection != nil || req.Metadata != nil
 	ingest := &knowledgeIngestResult{}
 	if replaceArtifacts {
+		// The chunks are rebuilt, so the marks describe the new ones: the
+		// hash of the content as it now is, and the chunking used here.
+		if metadata == nil {
+			metadata = map[string]string{}
+		}
+		stampIngestMarks(metadata, content, resolvedIngestOptions(collection, chunkSize, chunkOverlap))
 		plan, err := db.buildKnowledgeMutationPlan(ctx, knowledgeMutationInput{
 			KnowledgeID:  req.KnowledgeID,
 			Title:        title,
@@ -151,7 +162,7 @@ func (db *DB) UpdateKnowledge(ctx context.Context, req KnowledgeUpdateRequest) (
 		if err != nil {
 			return nil, err
 		}
-		if err := db.applyKnowledgeMutation(ctx, req.KnowledgeID, true, plan); err != nil {
+		if err := db.applyKnowledgeMutation(ctx, req.KnowledgeID, retireGraph, plan); err != nil {
 			return nil, err
 		}
 		ingest = &plan.ingest

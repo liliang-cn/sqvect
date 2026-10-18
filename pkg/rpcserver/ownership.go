@@ -186,6 +186,8 @@ func authorizeTypedArgs(key authz.Key, req any) error {
 			signed(m)
 		}
 	case *rpcv1.InsertGraphDocumentRequest:
+		// InsertGraphDocument drops a caller's copy of the marks, as the
+		// ingest_document line of the allowlist expects.
 		tool, args["collection"] = "ingest_document", r.GetCollection()
 		stringMap(r.GetMetadata())
 	case *rpcv1.SaveMemoryRequest:

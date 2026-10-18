@@ -37,6 +37,7 @@ func (t *GraphRAGToolbox) Definitions() []ToolDefinition {
 					"chunk_size":    toolIntegerSchema("Optional chunk size in words."),
 					"chunk_overlap": toolIntegerSchema("Optional chunk overlap in words."),
 					"metadata":      toolMapSchema("Optional document metadata. Kept on the document record, on the document graph node and on every chunk, and returned with every search hit."),
+					"dedupe":        toolBooleanSchema("When true, content already stored under another document_id of the same collection is not ingested again; the response names that document in duplicate_of. A re-ingest identical to what is stored writes nothing either way and reports unchanged."),
 				},
 			),
 		},

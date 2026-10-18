@@ -542,3 +542,35 @@ func TestACopyOfTheScopeFieldInsideAListIsRead(t *testing.T) {
 		}
 	}
 }
+
+// The marks the facade rewrites on every document write pass in the
+// metadata of the three tools that write a document, under their exact
+// spelling; another spelling, another engine key and a memory write keep
+// the refusal of a "_" key.
+func TestTheRewrittenMarksPassOnTheDocumentWritesOnly(t *testing.T) {
+	notes := Key{ID: "notes", Clearance: ReadWrite, Scope: Scope{Collection: "notes"}}
+	for _, tool := range []string{"ingest_document", "knowledge_save", "knowledge_update"} {
+		for _, mark := range cortexdb.EngineDocumentKeys() {
+			args := `{"collection":"notes","content":"c","metadata":{"` + mark + `":"x"}}`
+			if err := notes.AuthorizeToolArgs(tool, notes.ConfineToolArgs(tool, []byte(args))); err != nil {
+				t.Errorf("%s refused the mark %s: %v", tool, mark, err)
+			}
+		}
+		for _, key := range []string{strings.ToUpper(cortexdb.EngineDocumentKeys()[0]), "_table"} {
+			args := `{"collection":"notes","content":"c","metadata":{"` + key + `":"x"}}`
+			if err := notes.AuthorizeToolArgs(tool, notes.ConfineToolArgs(tool, []byte(args))); !errors.Is(err, ErrDenied) {
+				t.Errorf("%s took %s: %v", tool, key, err)
+			}
+		}
+	}
+	hermes := Key{ID: "hermes", Clearance: ReadWrite, Scope: Scope{UserID: "hermes"}}
+	if err := hermes.AuthorizeToolArgs("memory_save", hermes.ConfineToolArgs("memory_save", []byte(`{"user_id":"hermes","content":"c","metadata":{"team":"x"}}`))); err != nil {
+		t.Fatalf("memory_save refused plain metadata, so its refusal below proves nothing: %v", err)
+	}
+	for _, mark := range cortexdb.EngineDocumentKeys() {
+		args := `{"user_id":"hermes","content":"c","metadata":{"` + mark + `":"x"}}`
+		if err := hermes.AuthorizeToolArgs("memory_save", hermes.ConfineToolArgs("memory_save", []byte(args))); !errors.Is(err, ErrDenied) {
+			t.Errorf("memory_save took the mark %s: %v", mark, err)
+		}
+	}
+}

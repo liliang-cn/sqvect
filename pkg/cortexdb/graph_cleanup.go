@@ -15,12 +15,13 @@ import (
 // Producers recorded on the history rows this package's own write paths
 // close. See graph.Invalidation.
 const (
-	producerDocumentCleanup = "cortexdb.document_cleanup"
-	producerPruneMemory     = "cortexdb.prune_dangling_memory"
-	producerPruneJunk       = "cortexdb.prune_junk_entities"
-	producerMemoryDelete    = "cortexdb.memory_delete"
-	producerDeleteEntities  = "cortexdb.delete_entities"
-	producerOntologyAction  = "cortexdb.ontology_action"
+	producerDocumentCleanup  = "cortexdb.document_cleanup"
+	producerDocumentReingest = "cortexdb.document_reingest"
+	producerPruneMemory      = "cortexdb.prune_dangling_memory"
+	producerPruneJunk        = "cortexdb.prune_junk_entities"
+	producerMemoryDelete     = "cortexdb.memory_delete"
+	producerDeleteEntities   = "cortexdb.delete_entities"
+	producerOntologyAction   = "cortexdb.ontology_action"
 )
 
 func (db *DB) cleanupKnowledgeGraphArtifactsTx(ctx context.Context, tx *sql.Tx, knowledgeID string, chunks []*core.Embedding) ([]string, error) {
@@ -82,6 +83,25 @@ func (db *DB) cleanupKnowledgeGraphArtifactsTx(ctx context.Context, tx *sql.Tx, 
 		return nil, fmt.Errorf("delete orphan entity nodes: %w", err)
 	}
 	return append(nodeIDs, orphanIDs...), nil
+}
+
+// retireChunkNodesTx takes the chunk nodes of a document's previous text out
+// of the live graph into history, with the edges that hang off them, which
+// the delete cascades to. The document node, the entities and the relation
+// edges are not touched. It returns the ids it removed.
+func (db *DB) retireChunkNodesTx(ctx context.Context, tx *sql.Tx, chunkIDs []string) ([]string, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	at := time.Now().UTC()
+	rctx := graph.WithInvalidation(ctx, graph.Invalidation{Reason: graph.ReasonSuperseded, Producer: producerDocumentReingest})
+	if err := db.graph.ArchiveNodesTx(rctx, tx, chunkIDs, at); err != nil {
+		return nil, fmt.Errorf("record previous chunk nodes: %w", err)
+	}
+	if err := deleteStringIDsTx(ctx, db.Dialect(), tx, "graph_nodes", "id", chunkIDs); err != nil {
+		return nil, fmt.Errorf("delete previous chunk nodes: %w", err)
+	}
+	return chunkIDs, nil
 }
 
 func (db *DB) graphEdgeIDsByDocument(ctx context.Context, documentID string) ([]string, error) {
