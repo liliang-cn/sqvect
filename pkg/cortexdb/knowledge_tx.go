@@ -118,7 +118,7 @@ func (db *DB) buildEmbedderKnowledgePlan(ctx context.Context, input knowledgeMut
 	if err := db.appendKnowledgeExplicitArtifacts(ctx, input, entityNodes, entityTypes, edgeMap, &plan.ingest); err != nil {
 		return nil, err
 	}
-	if err := db.mergeEntityNodeProperties(ctx, entityNodes); err != nil {
+	if err := db.mergeEntityNodeProperties(ctx, entityNodes, ingestOpts.Collection); err != nil {
 		return nil, err
 	}
 	plan.graphOps.NodeUpserts = append(plan.graphOps.NodeUpserts, sortedNodePointers(entityNodes)...)
@@ -188,7 +188,7 @@ func (db *DB) buildLexicalKnowledgePlan(ctx context.Context, input knowledgeMuta
 	if err := db.appendKnowledgeExplicitArtifacts(ctx, input, entityNodes, entityTypes, edgeMap, &plan.ingest); err != nil {
 		return nil, err
 	}
-	if err := db.mergeEntityNodeProperties(ctx, entityNodes); err != nil {
+	if err := db.mergeEntityNodeProperties(ctx, entityNodes, ingestOpts.Collection); err != nil {
 		return nil, err
 	}
 	plan.graphOps.NodeUpserts = append(plan.graphOps.NodeUpserts, sortedNodePointers(entityNodes)...)
@@ -503,7 +503,7 @@ func (db *DB) buildExtractedEntityArtifacts(ctx context.Context, entityTexts map
 // entity it DECLARES is built here; a mention and a declaration of the same
 // object are the same object. Covering one and not the other made the outcome
 // depend on whether the request happened to declare something unrelated.
-func (db *DB) mergeEntityNodeProperties(ctx context.Context, entityNodes map[string]*graph.GraphNode) error {
+func (db *DB) mergeEntityNodeProperties(ctx context.Context, entityNodes map[string]*graph.GraphNode, collection string) error {
 	if len(entityNodes) == 0 {
 		return nil
 	}
@@ -511,8 +511,12 @@ func (db *DB) mergeEntityNodeProperties(ctx context.Context, entityNodes map[str
 	for _, node := range entityNodes {
 		nodes = append(nodes, node)
 	}
-	_, err := db.mergePriorEntityProperties(ctx, nodes)
-	return err
+	prior, err := db.mergePriorEntityProperties(ctx, nodes)
+	if err != nil {
+		return err
+	}
+	mergeEntityCollections(nodes, prior, collection)
+	return nil
 }
 
 func (db *DB) appendKnowledgeExplicitArtifacts(ctx context.Context, input knowledgeMutationInput, entityNodes map[string]*graph.GraphNode, entityTypes map[string]string, edgeMap map[string]*graph.GraphEdge, ingest *knowledgeIngestResult) error {

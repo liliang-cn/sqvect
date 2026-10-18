@@ -396,9 +396,11 @@ func (db *DB) InsertGraphDocument(ctx context.Context, doc GraphRAGDocument, opt
 		}
 		// The same rule as every other entity write: a mention carries a name
 		// and a type and must not wipe what a fuller write established.
-		if _, err := db.mergePriorEntityProperties(ctx, entityNodes); err != nil {
+		prior, err := db.mergePriorEntityProperties(ctx, entityNodes)
+		if err != nil {
 			return nil, err
 		}
+		mergeEntityCollections(entityNodes, prior, opts.Collection)
 		entityNodeResult, err := db.graph.UpsertNodesBatch(ctx, entityNodes)
 		if err != nil {
 			return nil, fmt.Errorf("upsert entity nodes: %w", err)

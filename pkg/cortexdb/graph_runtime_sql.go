@@ -13,6 +13,11 @@ type graphNodeSummary struct {
 	Content    string
 	NodeType   string
 	DocumentID string
+	// Collections is the entity node's `collections` property: the
+	// collections whose chunks mention it (entityCollectionsKey). Empty for
+	// a chunk, and for an entity written before the property existed or by
+	// a tool that has no collection — such an entity is known everywhere.
+	Collections []string
 }
 
 type graphEdgeSummary struct {
@@ -43,19 +48,29 @@ func (db *DB) graphNodeSummariesByIDs(ctx context.Context, nodeIDs []string) (ma
 			SELECT id,
 			       content,
 			       node_type,
-			       COALESCE(%s, '') AS document_id
+			       COALESCE(%s, '') AS document_id,
+			       COALESCE(%s, '') AS collections
 			FROM graph_nodes
 			WHERE id IN (%s)
-		`, db.dialect.JSONTextGuarded("properties", "document_id"), placeholders), args...)
+		`, db.dialect.JSONTextGuarded("properties", "document_id"),
+			db.dialect.JSONTextGuarded("properties", entityCollectionsKey), placeholders), args...)
 		if err != nil {
 			return nil, fmt.Errorf("query graph node summaries: %w", err)
 		}
 
 		for rows.Next() {
 			var summary graphNodeSummary
-			if err := rows.Scan(&summary.ID, &summary.Content, &summary.NodeType, &summary.DocumentID); err != nil {
+			var collectionsJSON string
+			if err := rows.Scan(&summary.ID, &summary.Content, &summary.NodeType, &summary.DocumentID, &collectionsJSON); err != nil {
 				_ = rows.Close()
 				return nil, fmt.Errorf("scan graph node summary: %w", err)
+			}
+			if collectionsJSON != "" {
+				// JSONTextGuarded hands an array back as its JSON text.
+				var list []string
+				if err := json.Unmarshal([]byte(collectionsJSON), &list); err == nil {
+					summary.Collections = list
+				}
 			}
 			summaries[summary.ID] = summary
 		}

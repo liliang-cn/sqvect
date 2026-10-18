@@ -114,6 +114,20 @@ func (db *DB) expandGraphChunkNeighborhoods(ctx context.Context, chunkResults ma
 		if err != nil {
 			return nil, err
 		}
+		// The walk crosses entity nodes, and an entity node is shared by every
+		// collection whose chunks mention it. A chunk reached through one must
+		// still belong to the collection searched: the same scope check the
+		// seeds passed, applied to the neighbours before any is kept.
+		chunkNeighborIDs := make([]string, 0, len(neighborIDs))
+		for _, neighborID := range neighborIDs {
+			if summary, ok := summaries[neighborID]; ok && summary.NodeType == "chunk" {
+				chunkNeighborIDs = append(chunkNeighborIDs, neighborID)
+			}
+		}
+		inScope, err := db.chunksInScope(ctx, chunkNeighborIDs, opts.Collection, filters)
+		if err != nil {
+			return nil, err
+		}
 
 		frontierScores = make(map[string]float64)
 		for _, neighborID := range neighborIDs {
@@ -126,10 +140,8 @@ func (db *DB) expandGraphChunkNeighborhoods(ctx context.Context, chunkResults ma
 
 			score := nextScores[neighborID]
 			switch summary.NodeType {
-			case "entity":
-				entitySet[summary.Content] = struct{}{}
 			case "chunk":
-				if !allowDocumentID(filters, summary.DocumentID) {
+				if _, ok := inScope[neighborID]; !ok {
 					continue
 				}
 				relatedScore := score * 0.5
@@ -145,6 +157,18 @@ func (db *DB) expandGraphChunkNeighborhoods(ctx context.Context, chunkResults ma
 				} else if relatedScore > existing.Score {
 					existing.Score = relatedScore
 					existing.BaseScore = relatedScore
+				}
+			case "document":
+			default:
+				// An entity, whatever its type: "entity" when the extractor named
+				// it, or an ontology type such as "organization". One that no
+				// chunk of this collection mentions is not this collection's to
+				// know about, nor to walk through.
+				if !entityKnownIn(summary.Collections, opts.Collection) {
+					continue
+				}
+				if summary.NodeType == "entity" {
+					entitySet[summary.Content] = struct{}{}
 				}
 			}
 
