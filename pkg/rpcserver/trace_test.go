@@ -10,8 +10,12 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
+	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 )
 
 func runThrough(t *testing.T, o TraceOptions, work func(ctx context.Context)) string {
@@ -42,6 +46,76 @@ func TestASlowCallIsLoggedWithItsStages(t *testing.T) {
 	var rec traceRecord
 	if err := json.Unmarshal(bytes.TrimSpace(file.Bytes()), &rec); err != nil || rec.Stages["embed"] < 30 {
 		t.Fatalf("trace file record: %v %+v", err, rec)
+	}
+}
+
+// The record names the key that spoke and the tool a CallTool ran, on a
+// served call and on a denied one alike. Without this a trace file over a
+// shared brain said what happened and when, and nothing about who: no answer
+// to "which key wrote this" or "which key is being refused all morning".
+func TestTheRecordNamesTheKeyAndTheTool(t *testing.T) {
+	var buf, file bytes.Buffer
+	chain := []grpc.UnaryServerInterceptor{
+		RequestLogInterceptor(TraceOptions{All: true, Log: log.New(&buf, "", 0), File: &file}),
+		authInterceptor(readerAndWriter(t), nil),
+	}
+	served := func(ctx context.Context, _ any) (any, error) { return nil, nil }
+	info := &grpc.UnaryServerInfo{FullMethod: callToolMethod}
+	call := func(secret, tool string) error {
+		ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+secret))
+		req := &rpcv1.CallToolRequest{Name: tool}
+		_, err := chain[0](ctx, req, info, func(ctx context.Context, req any) (any, error) {
+			return chain[1](ctx, req, info, served)
+		})
+		return err
+	}
+
+	if err := call("op-secret", "knowledge_search"); err != nil {
+		t.Fatalf("operator refused: %v", err)
+	}
+	if err := call("ro-secret", "ingest_document"); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a read-only key ingested: %v", err)
+	}
+	if err := call("not-a-key", "knowledge_search"); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("an unknown secret was served: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("want 3 log lines, got %d: %q", len(lines), buf.String())
+	}
+	for i, want := range [][]string{
+		{"rpc=CallTool", "key=operator", "tool=knowledge_search"},
+		{"rpc=CallTool", "key=reader", "tool=ingest_document", "err="},
+		{"rpc=CallTool", "tool=knowledge_search", "err="},
+	} {
+		for _, w := range want {
+			if !strings.Contains(lines[i], w) {
+				t.Fatalf("line %d lacks %q: %q", i, w, lines[i])
+			}
+		}
+	}
+	if strings.Contains(lines[2], "key=") {
+		t.Fatalf("an unauthenticated call must carry no key: %q", lines[2])
+	}
+	for _, line := range lines {
+		if strings.Contains(line, "op-secret") || strings.Contains(line, "ro-secret") {
+			t.Fatalf("a secret reached the log: %q", line)
+		}
+	}
+
+	var recs []traceRecord
+	for _, raw := range bytes.Split(bytes.TrimSpace(file.Bytes()), []byte("\n")) {
+		var rec traceRecord
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			t.Fatalf("trace file record %q: %v", raw, err)
+		}
+		recs = append(recs, rec)
+	}
+	if len(recs) != 3 || recs[0].Key != "operator" || recs[0].Tool != "knowledge_search" ||
+		recs[1].Key != "reader" || recs[1].Tool != "ingest_document" || recs[1].Err == "" ||
+		recs[2].Key != "" || recs[2].Tool != "knowledge_search" {
+		t.Fatalf("trace file records: %+v", recs)
 	}
 }
 

@@ -58,10 +58,51 @@ func TraceOptionsFromEnv() TraceOptions {
 type traceRecord struct {
 	TS     string           `json:"ts"`
 	Method string           `json:"method"`
+	Key    string           `json:"key,omitempty"`
+	Tool   string           `json:"tool,omitempty"`
 	DurMs  int64            `json:"dur_ms"`
 	Stages map[string]int64 `json:"stages_ms,omitempty"`
 	Err    string           `json:"err,omitempty"`
 }
+
+// callerTag is what the request log learns about a call after it has started
+// timing it: which key spoke. The log runs outside the policy gate (see
+// Options.Interceptors), so the key is not known when the log begins, and a
+// context value set further down the chain never travels back up. The log
+// plants this holder in the context instead, the auth interceptor fills it in
+// once the key is resolved, and the log reads it back when the call returns.
+//
+// Only the key's id is kept, never its secret: the record is for an operator
+// asking "who wrote this", and a trace file is not a place to keep a
+// credential. Whether the call was then denied is already in err.
+type callerTag struct {
+	mu  sync.Mutex
+	key string
+}
+
+type callerTagContextKey struct{}
+
+// tagCaller records the id of the key a call authenticated as. Free when the
+// request log is not installed.
+func tagCaller(ctx context.Context, keyID string) {
+	tag, _ := ctx.Value(callerTagContextKey{}).(*callerTag)
+	if tag == nil {
+		return
+	}
+	tag.mu.Lock()
+	tag.key = keyID
+	tag.mu.Unlock()
+}
+
+func (t *callerTag) keyID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.key
+}
+
+// callToolMethod is the one RPC whose request names a tool, which the record
+// keeps beside the method: "CallTool" alone says nothing about what ran.
+const callToolMethod = "/cortexdb.v1.ToolsService/CallTool"
 
 // RequestLogInterceptor gives every call a stage collector and logs the call
 // when the options say to.
@@ -73,6 +114,8 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 	var fileMu sync.Mutex
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		ctx, stages := observability.WithStages(ctx)
+		tag := &callerTag{}
+		ctx = context.WithValue(ctx, callerTagContextKey{}, tag)
 		start := time.Now()
 		resp, err := handler(ctx, req)
 		dur := time.Since(start)
@@ -83,7 +126,18 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 		if i := strings.LastIndexByte(method, '/'); i >= 0 {
 			method = method[i+1:]
 		}
+		key := tag.keyID()
+		tool := ""
+		if info.FullMethod == callToolMethod {
+			tool, _ = requestToolName(req)()
+		}
 		line := "cortexdb-trace rpc=" + method + " dur=" + strconv.FormatFloat(dur.Seconds(), 'f', 2, 64) + "s"
+		if key != "" {
+			line += " key=" + key
+		}
+		if tool != "" {
+			line += " tool=" + tool
+		}
 		if s := stages.String(); s != "" {
 			line += " " + s
 		}
@@ -95,7 +149,7 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 		}
 		logger.Print(line)
 		if o.File != nil {
-			rec := traceRecord{TS: start.UTC().Format(time.RFC3339Nano), Method: method, DurMs: dur.Milliseconds(), Stages: stages.Millis()}
+			rec := traceRecord{TS: start.UTC().Format(time.RFC3339Nano), Method: method, Key: key, Tool: tool, DurMs: dur.Milliseconds(), Stages: stages.Millis()}
 			if err != nil {
 				rec.Err = err.Error()
 			}
