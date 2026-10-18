@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The SessionEnd capture launcher no longer leaves one `capture-payload.*`
+  file per session in `~/.cache/cortexdb` when no `CORTEXDB_LLM_*` is
+  configured: it declines before writing anything, the detached capture
+  removes its payload on any exit including a signal, and payloads older
+  than a day are swept on the next run.
+
 ## [2.132.1] - 2026-10-18
 
 ### Fixed

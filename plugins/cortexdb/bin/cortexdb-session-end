@@ -35,6 +35,12 @@ fi
 # A Claude Code session running the cortexdb-live mod has captured itself while
 # it was idle; capturing again here would write each fact a second time.
 [ "${CORTEXDB_CAPTURE_BY_MOD:-}" = 1 ] && exit 0
+# Decline before touching the disk when no LLM is configured. The binary makes
+# the same check (newOrganizeLLM in llm.go), but by the time it runs the payload
+# below has already been written, and a hook killed with its session's process
+# group never reached the rm. On a machine with many short automated sessions
+# that left one capture-payload.* file per session.
+[ -n "${CORTEXDB_LLM_BASE_URL:-}${CORTEXDB_LLM_URL:-}" ] || exit 0
 
 self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 
@@ -62,11 +68,25 @@ fi
 # Park the payload in a file: the detached process must not depend on our
 # stdin surviving, and the hook must return before the capture runs.
 mkdir -p "$cache_root"
+# A payload older than a day belongs to a capture that never finished (killed
+# with its session, or left by an earlier version of this script). Sweep it so
+# the cache cannot grow without bound.
+find "$cache_root" -maxdepth 1 -name 'capture-payload.*' -mtime +0 -exec rm -f {} + 2>/dev/null || true
 payload="$(mktemp "${cache_root}/capture-payload.XXXXXX")"
 cat > "$payload" 2>/dev/null || { rm -f "$payload"; exit 0; }
 
 logfile="${cache_root}/capture.log"
-nohup sh -c '"$1" --capture-session < "$2" >> "$3" 2>&1; rm -f "$2"' \
-  capture "$bin" "$payload" "$logfile" >/dev/null 2>&1 &
+# The trap removes the payload however the capture ends, including a signal.
+# The capture runs as a background child under wait, not in the foreground: a
+# shell defers its traps until a foreground command returns, so a TERM would
+# otherwise wait on the capture it was meant to end. The signal is passed on
+# to the capture, and EXIT then removes the payload.
+nohup sh -c '
+  trap "rm -f \"\$2\"" EXIT
+  "$1" --capture-session < "$2" >> "$3" 2>&1 &
+  pid=$!
+  trap "kill \$pid 2>/dev/null" HUP INT TERM
+  wait "$pid"
+' capture "$bin" "$payload" "$logfile" >/dev/null 2>&1 &
 
 exit 0
