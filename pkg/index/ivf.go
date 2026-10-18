@@ -177,6 +177,12 @@ func (ivf *IVFIndex) Train(vectors [][]float32) error {
 		return fmt.Errorf("need at least %d vectors for training, got %d", ivf.NCentroids, len(vectors))
 	}
 
+	for i, v := range vectors {
+		if len(v) != ivf.Dimension {
+			return fmt.Errorf("training vector %d dimension %d doesn't match index dimension %d", i, len(v), ivf.Dimension)
+		}
+	}
+
 	// Run k-means to find centroids
 	centroids, err := kMeansIVF(vectors, ivf.NCentroids, 20)
 	if err != nil {
