@@ -393,26 +393,31 @@ func kMeans(vectors [][]float32, k int, maxIters int) ([][]float32, error) {
 			break
 		}
 
-		// Update centroids
+		// Update centroids. A cluster that attracted no vector keeps its
+		// previous position: zeroing it would plant a codeword at the origin,
+		// far from any training data.
 		counts := make([]int, k)
-		for i := range centroids {
-			centroids[i] = make([]float32, dim)
+		sums := make([][]float32, k)
+		for i := range sums {
+			sums[i] = make([]float32, dim)
 		}
 
 		for i, vec := range vectors {
 			cluster := assignments[i]
 			counts[cluster]++
 			for j := 0; j < dim; j++ {
-				centroids[cluster][j] += vec[j]
+				sums[cluster][j] += vec[j]
 			}
 		}
 
 		for i := range centroids {
-			if counts[i] > 0 {
-				for j := 0; j < dim; j++ {
-					centroids[i][j] /= float32(counts[i])
-				}
+			if counts[i] == 0 {
+				continue
 			}
+			for j := 0; j < dim; j++ {
+				sums[i][j] /= float32(counts[i])
+			}
+			centroids[i] = sums[i]
 		}
 	}
 
