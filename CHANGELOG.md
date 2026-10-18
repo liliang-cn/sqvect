@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.133.0] - 2026-10-19
+
+### Added
+
+- A key's scope may list several values per field: `user_ids`, `scopes`,
+  `namespaces` and `collections` beside the singular `user_id`, `scope`,
+  `namespace` and `collection`, which keep working; the two forms add up.
+  A request still names one value; the list widens what the key may name.
+  A list holding an empty string is refused when the key file loads (#71).
+- The gRPC request log names the key behind each call (`key=<id>`, never the
+  secret) and the tool a CallTool ran (`tool=<name>`), on served and denied
+  calls alike. CORTEXDB_TRACE_FILE records carry the same two fields (#68).
+- ingest_document takes `source_url` and `author` and keeps them, with the
+  caller's metadata, on the document record and the document node, as
+  knowledge_save does, so a search hit reports where the document came from.
+  A re-ingest replaces the record's provenance (#69).
+
+### Fixed
+
+- A scope-confined key could reach another user's rows over REST by sending
+  a second spelling of the field: `{"user_id":"hermes","USER_ID":"zeus"}`
+  passed the check, which read only the exact key, while the handler's JSON
+  decoder took zeus. Every case variant, top-level or nested, is now held to
+  the confinement (#64).
+- A graph search confined to one collection reached another collection's
+  chunks through an entity both mention. Entity nodes now record which
+  collections mention them, the walk keeps to entities the searched
+  collection knows, and every chunk it reaches is checked against the
+  collection. Unconfined searches are unchanged (#70).
+- The SessionEnd capture hook declines before writing anything when no LLM
+  is configured, and removes its payload file however the capture ends,
+  including a signal; payloads older than a day are swept (#67).
+- IVF training rejects vectors of the wrong dimension instead of panicking
+  (#65). OptimizedBinaryQuantizer.Project returns nil for a vector longer
+  than its input dimension instead of panicking (#63).
+
 ## [2.132.1] - 2026-10-18
 
 ### Fixed
