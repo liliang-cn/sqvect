@@ -42,26 +42,46 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 		return nil, ErrEmptyText
 	}
 
+	// The record carries what the caller said about the document, not only
+	// its text: a search hit reports Title, SourceURL, Author and Metadata
+	// from this record (knowledge_helpers.go), so a document ingested here
+	// without them answered every question with no provenance. The same
+	// fields are what knowledge_save keeps, so both ingest paths now agree.
 	docRecord := &core.Document{
-		ID:      req.DocumentID,
-		Title:   req.Title,
-		Content: req.Content,
-		Version: 1,
+		ID:        req.DocumentID,
+		Title:     req.Title,
+		Content:   req.Content,
+		SourceURL: req.SourceURL,
+		Author:    req.Author,
+		Version:   1,
+		Metadata:  stringMapToAnyMap(req.Metadata),
 	}
 	if err := t.db.upsertGraphRAGDocumentRecord(ctx, docRecord); err != nil {
 		return nil, err
 	}
 
 	docNodeID := graphDocumentNodeID(req.DocumentID)
+	// The document node gets the same provenance as properties, so a Cypher
+	// query can select documents by source or by any metadata key. The
+	// caller's keys cannot displace the two the graph relies on.
+	docProps := map[string]interface{}{}
+	for k, v := range req.Metadata {
+		docProps[k] = v
+	}
+	if req.SourceURL != "" {
+		docProps["source_url"] = req.SourceURL
+	}
+	if req.Author != "" {
+		docProps["author"] = req.Author
+	}
+	docProps["document_id"] = req.DocumentID
+	docProps["title"] = req.Title
 	docNode := &graph.GraphNode{
-		ID:       docNodeID,
-		Vector:   lexicalVectorForText(firstNonEmpty(req.Title, req.Content), vectorDim),
-		Content:  firstNonEmpty(req.Title, req.Content),
-		NodeType: "document",
-		Properties: map[string]interface{}{
-			"document_id": req.DocumentID,
-			"title":       req.Title,
-		},
+		ID:         docNodeID,
+		Vector:     lexicalVectorForText(firstNonEmpty(req.Title, req.Content), vectorDim),
+		Content:    firstNonEmpty(req.Title, req.Content),
+		NodeType:   "document",
+		Properties: docProps,
 	}
 	if err := t.db.graph.UpsertNode(ctx, docNode); err != nil {
 		return nil, fmt.Errorf("upsert document node: %w", err)

@@ -49,6 +49,8 @@ type ToolIngestDocumentRequest struct {
 	DocumentID   string            `json:"document_id"`
 	Title        string            `json:"title,omitempty"`
 	Content      string            `json:"content"`
+	SourceURL    string            `json:"source_url,omitempty"`
+	Author       string            `json:"author,omitempty"`
 	Collection   string            `json:"collection,omitempty"`
 	ChunkSize    int               `json:"chunk_size,omitempty"`
 	ChunkOverlap int               `json:"chunk_overlap,omitempty"`
