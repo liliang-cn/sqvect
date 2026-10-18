@@ -128,44 +128,30 @@ func withheld(kind, id string) error {
 // Ignoring an uncheckable constraint is how a scope quietly becomes wider than
 // it reads.
 func scopePermitsMemory(scope authz.Scope, record cortexdb.MemoryRecord) bool {
-	return fieldsMatch(
-		[2]string{scope.UserID, record.UserID},
-		[2]string{scope.MemoryScope, record.Scope},
-		[2]string{scope.Namespace, record.Namespace},
+	return scope.Permits(authz.FieldUserID, record.UserID) &&
+		scope.Permits(authz.FieldScope, record.Scope) &&
+		scope.Permits(authz.FieldNamespace, record.Namespace) &&
 		// Memories carry no collection, so a collection-confined key has
 		// nothing to match and is refused.
-		[2]string{scope.Collection, ""},
-	)
+		scope.Permits(authz.FieldCollection, "")
 }
 
 // scopePermitsKnowledge is scopePermitsMemory for knowledge documents, which
 // carry a collection and none of the memory scoping fields. A user_id-confined
 // key therefore reaches no knowledge row at all — the same answer the
 // interceptor already gives it for SearchKnowledge, which declares no user_id.
-func scopePermitsKnowledge(scope authz.Scope, record cortexdb.KnowledgeRecord) bool {
-	return fieldsMatch(
-		[2]string{scope.Collection, record.Collection},
-		[2]string{scope.UserID, ""},
-		[2]string{scope.MemoryScope, ""},
-		[2]string{scope.Namespace, ""},
-	)
-}
-
-// fieldsMatch checks {confinement, row value} pairs: a confinement that is not
-// set constrains nothing, and one that is set must equal the row's value.
 //
-// Equality is the whole rule, and it is what makes the two hard cases fall out
-// rather than needing to be special-cased: an unowned row's empty value never
-// equals a non-empty confinement, and neither does the empty string passed in
-// for a field the row's kind does not have at all. Both are refusals because
-// they are not matches, not because a branch remembered to refuse them.
-func fieldsMatch(pairs ...[2]string) bool {
-	for _, p := range pairs {
-		if want, got := p[0], p[1]; want != "" && got != want {
-			return false
-		}
-	}
-	return true
+// Membership is the whole rule (authz.Scope.Permits), and it is what makes the
+// two hard cases fall out rather than needing to be special-cased: an unowned
+// row's empty value is never among a confinement's values, and neither is the
+// empty string passed in for a field the row's kind does not have at all. Both
+// are refusals because they are not matches, not because a branch remembered
+// to refuse them.
+func scopePermitsKnowledge(scope authz.Scope, record cortexdb.KnowledgeRecord) bool {
+	return scope.Permits(authz.FieldCollection, record.Collection) &&
+		scope.Permits(authz.FieldUserID, "") &&
+		scope.Permits(authz.FieldScope, "") &&
+		scope.Permits(authz.FieldNamespace, "")
 }
 
 // guardMemory is the pre-flight for every id-addressed memory RPC. It reports

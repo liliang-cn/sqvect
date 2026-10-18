@@ -244,21 +244,21 @@ func (k Key) AuthorizeRows(fullMethod string, lookup FieldLookup) error {
 	for _, c := range k.Scope.constraints() {
 		top, nested, declared := lookup(c.field)
 		if !declared {
-			return fmt.Errorf("%w: key %q is confined to %s=%q and %s carries no %s field",
-				ErrDenied, k.ID, c.field, c.value, fullMethod, c.field)
+			return fmt.Errorf("%w: key %q is confined to %s=%s and %s carries no %s field",
+				ErrDenied, k.ID, c.field, c, fullMethod, c.field)
 		}
 		if top == "" {
-			return fmt.Errorf("%w: key %q is confined to %s=%q and the request leaves %s unset",
-				ErrDenied, k.ID, c.field, c.value, c.field)
+			return fmt.Errorf("%w: key %q is confined to %s=%s and the request leaves %s unset",
+				ErrDenied, k.ID, c.field, c, c.field)
 		}
-		if top != c.value {
-			return fmt.Errorf("%w: key %q is confined to %s=%q and the request asks for %q",
-				ErrDenied, k.ID, c.field, c.value, top)
+		if !c.allows(top) {
+			return fmt.Errorf("%w: key %q is confined to %s=%s and the request asks for %q",
+				ErrDenied, k.ID, c.field, c, top)
 		}
 		for _, v := range nested {
-			if v != c.value {
-				return fmt.Errorf("%w: key %q is confined to %s=%q and the request carries a nested %s=%q",
-					ErrDenied, k.ID, c.field, c.value, c.field, v)
+			if !c.allows(v) {
+				return fmt.Errorf("%w: key %q is confined to %s=%s and the request carries a nested %s=%q",
+					ErrDenied, k.ID, c.field, c, c.field, v)
 			}
 		}
 	}

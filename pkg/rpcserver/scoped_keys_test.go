@@ -276,3 +276,41 @@ func TestAKeyFileOnDiskDrivesTheRunningServer(t *testing.T) {
 		t.Fatalf("the environment token outranked the key file: %v", err)
 	}
 }
+
+// One key, several collections: the shared-brain shape where an agent reads
+// its team's knowledge and its own. Each listed collection is reachable, and
+// one outside the list is refused like any other.
+func TestAKeyConfinedToSeveralCollectionsReachesEachOfThem(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{
+		{ID: "lf", Secret: "lf-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{Collections: []string{"team-acme", "user-lf"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := newPolicyConn(t, Options{Keys: ks})
+	knowledge := rpcv1.NewKnowledgeServiceClient(conn)
+
+	for _, c := range []string{"team-acme", "user-lf"} {
+		if _, err := knowledge.SaveKnowledge(asKey("lf-secret"), &rpcv1.SaveKnowledgeRequest{
+			KnowledgeId: "k-" + c, Title: c, Content: "Kept in " + c + ".", Collection: c,
+		}); err != nil {
+			t.Fatalf("save into %s: %v", c, err)
+		}
+		if _, err := knowledge.SearchKnowledge(asKey("lf-secret"), &rpcv1.SearchKnowledgeRequest{
+			Query: "kept", Collection: c, TopK: 3,
+		}); err != nil {
+			t.Fatalf("search in %s: %v", c, err)
+		}
+	}
+	_, err = knowledge.SearchKnowledge(asKey("lf-secret"), &rpcv1.SearchKnowledgeRequest{
+		Query: "kept", Collection: "secrets", TopK: 3,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("searched a collection outside the list: %v", err)
+	}
+	// A row in a collection outside the list is withheld by id as well.
+	if _, err := knowledge.GetKnowledge(asKey("lf-secret"), &rpcv1.GetKnowledgeRequest{KnowledgeId: "k-team-acme"}); err != nil {
+		t.Fatalf("own row by id: %v", err)
+	}
+}
