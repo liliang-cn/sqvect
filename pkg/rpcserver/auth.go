@@ -42,6 +42,10 @@ func authInterceptor(keys *authz.KeySet, db *cortexdb.DB) grpc.UnaryServerInterc
 			// them apart tells a prober which guesses were once right.
 			return nil, status.Error(codes.Unauthenticated, "invalid token")
 		}
+		// Known from here on, whatever the policy says next: a denied call
+		// is logged under the key that asked, which is the line an operator
+		// reads when a scope is too narrow or a key is being probed.
+		tagCaller(ctx, key.ID)
 		// AuthorizeCall rather than AuthorizeMethod: the interceptor can read
 		// the request, so it can tell the policy which tool a CallTool names
 		// and get the classification of that tool instead of the blanket one.
