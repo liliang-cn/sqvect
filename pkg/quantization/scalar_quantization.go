@@ -466,8 +466,18 @@ func NewOptimizedBinaryQuantizer(inputDim, outputDim int) *OptimizedBinaryQuanti
 	return obq
 }
 
-// Project applies random projections before binarization
+// Project applies random projections before binarization. It returns nil when
+// the vector is longer than the input dimension the projections were built
+// for, since its extra components have no projection weights.
 func (obq *OptimizedBinaryQuantizer) Project(vector []float32) []float32 {
+	if len(obq.Projections) < obq.Dimension {
+		return nil
+	}
+	for i := 0; i < obq.Dimension; i++ {
+		if len(vector) > len(obq.Projections[i]) {
+			return nil
+		}
+	}
 	projected := make([]float32, obq.Dimension)
 
 	for i := 0; i < obq.Dimension; i++ {
