@@ -271,8 +271,14 @@ func (db *DB) upsertGraphRAGDocumentRecord(ctx context.Context, doc *core.Docume
 		}
 		return nil
 	}
+	// A re-ingest replaces the record's provenance the way knowledge_save
+	// does (upsertKnowledgeDocumentRecord): the new call is the current
+	// statement about the document, including an empty one.
 	existing.Title = doc.Title
 	existing.Content = doc.Content
+	existing.SourceURL = doc.SourceURL
+	existing.Author = doc.Author
+	existing.Metadata = doc.Metadata
 	existing.Version++
 	if err := db.store.UpdateDocument(ctx, existing); err != nil {
 		return fmt.Errorf("update document record: %w", err)
