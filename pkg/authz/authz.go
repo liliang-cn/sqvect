@@ -26,6 +26,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 )
 
 // ErrDenied is the sentinel behind every refusal in this package. The gRPC
@@ -70,6 +72,13 @@ const (
 // windows, per-RPC allow lists. A scope that cannot be decided from the request
 // message alone is a scope that fails open somewhere, and a scope nobody can
 // reason about is worse than no scope at all.
+//
+// Each field comes in a singular and a plural form. The singular confines the
+// key to one value, which is what every key file written so far says. The
+// plural confines it to any of several — the key of an agent that reads its
+// team's collection and its own — and the two forms add up when both are
+// given. A request still names exactly one value per field; the plural widens
+// what the key may name, not what one request may ask for.
 type Scope struct {
 	UserID string `json:"user_id,omitempty"`
 	// MemoryScope is the memory scope string (MemoryScopeUser, Session, …).
@@ -78,33 +87,118 @@ type Scope struct {
 	MemoryScope string `json:"scope,omitempty"`
 	Namespace   string `json:"namespace,omitempty"`
 	Collection  string `json:"collection,omitempty"`
+
+	UserIDs      []string `json:"user_ids,omitempty"`
+	MemoryScopes []string `json:"scopes,omitempty"`
+	Namespaces   []string `json:"namespaces,omitempty"`
+	Collections  []string `json:"collections,omitempty"`
 }
 
 // IsZero reports whether the scope confines nothing.
-func (s Scope) IsZero() bool { return s == Scope{} }
+func (s Scope) IsZero() bool { return len(s.constraints()) == 0 }
 
-// constraint is one confinement: a request field name and the only value the
-// key may ask for under it.
+// Permits reports whether the scope lets a key touch a row whose named field
+// holds value. A field the scope does not confine permits anything. A confined
+// field permits only its values, so an empty value — a row that predates
+// scoping, or a field the row's kind does not have — is never permitted, which
+// is the fail-closed answer the row checks rely on.
+func (s Scope) Permits(field, value string) bool {
+	for _, c := range s.constraints() {
+		if c.field == field {
+			return c.allows(value)
+		}
+	}
+	return true
+}
+
+// constraint is one confinement: a request field name and the values the key
+// may ask for under it.
 type constraint struct {
-	field string
-	value string
+	field  string
+	values []string
+}
+
+// allows reports whether a request may name v under this field.
+func (c constraint) allows(v string) bool {
+	for _, want := range c.values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
+// String is how a denial spells the confinement: one value quoted as before,
+// several as a list, so the operator reading the log sees the whole scope.
+func (c constraint) String() string {
+	if len(c.values) == 1 {
+		return strconv.Quote(c.values[0])
+	}
+	quoted := make([]string, len(c.values))
+	for i, v := range c.values {
+		quoted[i] = strconv.Quote(v)
+	}
+	return "[" + strings.Join(quoted, ",") + "]"
 }
 
 // constraints lists the confinements in a stable order, so a denial names the
-// same field every time for the same key and request.
+// same field every time for the same key and request. Singular and plural
+// forms of a field merge into one constraint.
 func (s Scope) constraints() []constraint {
 	var out []constraint
-	for _, c := range []constraint{
-		{FieldUserID, s.UserID},
-		{FieldScope, s.MemoryScope},
-		{FieldNamespace, s.Namespace},
-		{FieldCollection, s.Collection},
+	for _, c := range []struct {
+		field string
+		one   string
+		many  []string
+	}{
+		{FieldUserID, s.UserID, s.UserIDs},
+		{FieldScope, s.MemoryScope, s.MemoryScopes},
+		{FieldNamespace, s.Namespace, s.Namespaces},
+		{FieldCollection, s.Collection, s.Collections},
 	} {
-		if c.value != "" {
-			out = append(out, c)
+		var values []string
+		if c.one != "" {
+			values = append(values, c.one)
+		}
+		for _, v := range c.many {
+			if v != "" && !contains(values, v) {
+				values = append(values, v)
+			}
+		}
+		if len(values) > 0 {
+			out = append(out, constraint{field: c.field, values: values})
 		}
 	}
 	return out
+}
+
+func contains(values []string, v string) bool {
+	for _, w := range values {
+		if w == v {
+			return true
+		}
+	}
+	return false
+}
+
+// validate refuses the one shape of scope that would read as a confinement and
+// act as none: a plural list holding an empty string. An empty singular field
+// is "unconfined" by design and stays so.
+func (s Scope) validate() error {
+	for _, l := range []struct {
+		name   string
+		values []string
+	}{
+		{"user_ids", s.UserIDs}, {"scopes", s.MemoryScopes},
+		{"namespaces", s.Namespaces}, {"collections", s.Collections},
+	} {
+		for _, v := range l.values {
+			if v == "" {
+				return fmt.Errorf("scope %s holds an empty value", l.name)
+			}
+		}
+	}
+	return nil
 }
 
 // Key is one credential. The secret is the bearer token as it arrives on the
@@ -175,6 +269,9 @@ func NewKeySet(keys []Key) (*KeySet, error) {
 		}
 		if _, dup := ids[k.ID]; dup {
 			return nil, fmt.Errorf("key %q: duplicate id", k.ID)
+		}
+		if err := k.Scope.validate(); err != nil {
+			return nil, fmt.Errorf("key %q: %w", k.ID, err)
 		}
 		// Two keys sharing a secret cannot be told apart on the wire, so which
 		// scope a request got would depend on file order. Refuse instead.

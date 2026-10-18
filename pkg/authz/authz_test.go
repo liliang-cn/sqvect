@@ -291,3 +291,63 @@ func TestANestedCopyOfAScopeFieldCannotContradictTheKey(t *testing.T) {
 		t.Fatal("a nested filter smuggled another user past the scope check")
 	}
 }
+
+// A key may be confined to several values of one field: the agent that reads
+// its team's collection and its own has one key, not two. The singular and
+// plural forms add up, a request still names one value, and a value outside
+// the list is refused with the whole list in the denial.
+func TestAKeyMayBeConfinedToSeveralCollections(t *testing.T) {
+	ks, err := Parse([]byte(`{"keys":[{"id":"lf","secret":"s","clearance":"read-write",
+		"scope":{"collection":"team-acme","collections":["user-lf","org-reference"]}}]}`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	key, _ := ks.Lookup("s")
+	if key.Scope.IsZero() {
+		t.Fatal("a key with collections is not confined")
+	}
+	ask := func(collection string) error {
+		return key.AuthorizeRows("/cortexdb.v1.KnowledgeService/SearchKnowledge", func(field string) (string, []string, bool) {
+			if field == FieldCollection {
+				return collection, nil, true
+			}
+			return "", nil, true
+		})
+	}
+	for _, ok := range []string{"team-acme", "user-lf", "org-reference"} {
+		if err := ask(ok); err != nil {
+			t.Fatalf("refused permitted collection %s: %v", ok, err)
+		}
+	}
+	err = ask("secrets")
+	if !errors.Is(err, ErrDenied) {
+		t.Fatalf("another collection was served: %v", err)
+	}
+	for _, want := range []string{`"team-acme"`, `"user-lf"`, `"org-reference"`, `asks for "secrets"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("denial %q should contain %s", err, want)
+		}
+	}
+	if !key.Scope.Permits(FieldCollection, "user-lf") || key.Scope.Permits(FieldCollection, "secrets") ||
+		key.Scope.Permits(FieldCollection, "") || !key.Scope.Permits(FieldUserID, "anyone") {
+		t.Fatal("Permits disagrees with the constraint")
+	}
+}
+
+func TestAnEmptyValueInAScopeListIsRefused(t *testing.T) {
+	// ["team", ""] would read as a confinement and match nothing or, worse,
+	// be taken for "unconfined" by a careless reader of the file.
+	_, err := NewKeySet([]Key{{ID: "k", Secret: "s", Clearance: ReadOnly, Scope: Scope{Collections: []string{"team", ""}}}})
+	if err == nil || !strings.Contains(err.Error(), "collections") {
+		t.Fatalf("an empty list value was accepted: %v", err)
+	}
+	// A duplicate between the forms is merged, not an error.
+	ks, err := NewKeySet([]Key{{ID: "k", Secret: "s", Clearance: ReadOnly, Scope: Scope{Collection: "a", Collections: []string{"a", "b"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := ks.Lookup("s")
+	if got := key.Scope.constraints()[0].String(); got != `["a","b"]` {
+		t.Fatalf("merged constraint reads %s", got)
+	}
+}

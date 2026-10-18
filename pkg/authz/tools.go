@@ -110,7 +110,7 @@ func (k Key) AuthorizeCall(fullMethod string, tool ToolNameLookup) error {
 // says so in the error.
 func confinedCallToolDenial(k Key) error {
 	c := k.Scope.constraints()[0]
-	return fmt.Errorf("%w: key %q is confined to %s=%q and %s carries its arguments as opaque JSON, "+
+	return fmt.Errorf("%w: key %q is confined to %s=%s and %s carries its arguments as opaque JSON, "+
 		"which no scope can be checked against — use the typed RPCs instead",
-		ErrDenied, k.ID, c.field, c.value, CallToolMethod)
+		ErrDenied, k.ID, c.field, c, CallToolMethod)
 }
