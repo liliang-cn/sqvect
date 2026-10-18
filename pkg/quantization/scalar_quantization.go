@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/bits"
 	"math/rand"
+	"sort"
 )
 
 // ScalarQuantizer implements scalar quantization for vector compression
@@ -409,14 +410,10 @@ func (bq *BinaryQuantizer) SearchBinary(query []byte, database [][]byte, topK in
 		results = append(results, result{idx: i, dist: dist})
 	}
 
-	// Sort by Hamming distance
-	for i := 0; i < len(results)-1; i++ {
-		for j := i + 1; j < len(results); j++ {
-			if results[j].dist < results[i].dist {
-				results[i], results[j] = results[j], results[i]
-			}
-		}
-	}
+	// Sort by Hamming distance; equal distances keep database order.
+	sort.SliceStable(results, func(i, j int) bool {
+		return results[i].dist < results[j].dist
+	})
 
 	// Return top-K
 	k := topK
