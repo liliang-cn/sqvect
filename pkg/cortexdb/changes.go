@@ -340,11 +340,65 @@ func (t *GraphRAGToolbox) callChangeTool(ctx context.Context, name string, input
 // addChangeMCPTools registers changes_since beside its definition, for the
 // reason addTemporalMCPTools gives.
 func addChangeMCPTools(server *mcp.Server, definitions map[string]ToolDefinition, db *DB) {
-	addGraphRAGMCPTool(server, definitions["changes_since"], func(ctx context.Context, req ChangesSinceRequest) (ChangesSinceResponse, error) {
+	addGraphRAGMCPTool(server, definitions["changes_since"], func(ctx context.Context, req ChangesSinceRequest) (changesSinceMCPResponse, error) {
 		resp, err := db.ChangesSince(ctx, req)
 		if err != nil {
-			return ChangesSinceResponse{}, err
+			return changesSinceMCPResponse{}, err
 		}
-		return *resp, nil
+		return newChangesSinceMCPResponse(resp), nil
 	})
+}
+
+// changeEventMCP is graph.ChangeEvent as the MCP tool returns it. Before and
+// After are json.RawMessage there, which the inferred output schema reads as
+// a byte array ("null or array"), so every event with a row summary failed
+// output validation. Typed as any, they carry the same raw JSON and get an
+// open schema.
+type changeEventMCP struct {
+	Seq      int64     `json:"seq"`
+	At       time.Time `json:"at"`
+	Kind     string    `json:"kind"`
+	Op       string    `json:"op"`
+	ID       string    `json:"id"`
+	Reason   string    `json:"reason,omitempty"`
+	Producer string    `json:"producer,omitempty"`
+	Before   any       `json:"before,omitempty"`
+	After    any       `json:"after,omitempty"`
+}
+
+// changesSinceMCPResponse is ChangesSinceResponse with changeEventMCP events.
+type changesSinceMCPResponse struct {
+	Events              []changeEventMCP `json:"events"`
+	NextCursor          int64            `json:"next_cursor"`
+	Head                int64            `json:"head"`
+	More                bool             `json:"more"`
+	Pruned              bool             `json:"pruned,omitempty"`
+	PrunedThrough       int64            `json:"pruned_through,omitempty"`
+	InferenceAppliedSeq int64            `json:"inference_applied_seq"`
+}
+
+func newChangesSinceMCPResponse(resp *ChangesSinceResponse) changesSinceMCPResponse {
+	out := changesSinceMCPResponse{
+		Events:              make([]changeEventMCP, 0, len(resp.Events)),
+		NextCursor:          resp.NextCursor,
+		Head:                resp.Head,
+		More:                resp.More,
+		Pruned:              resp.Pruned,
+		PrunedThrough:       resp.PrunedThrough,
+		InferenceAppliedSeq: resp.InferenceAppliedSeq,
+	}
+	for _, ev := range resp.Events {
+		wire := changeEventMCP{
+			Seq: ev.Seq, At: ev.At, Kind: ev.Kind, Op: ev.Op, ID: ev.ID,
+			Reason: ev.Reason, Producer: ev.Producer,
+		}
+		if len(ev.Before) > 0 {
+			wire.Before = ev.Before
+		}
+		if len(ev.After) > 0 {
+			wire.After = ev.After
+		}
+		out.Events = append(out.Events, wire)
+	}
+	return out
 }
