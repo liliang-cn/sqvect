@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.132.1] - 2026-10-18
+
+### Fixed
+
+- changes_since over MCP failed output validation for every event that
+  carried a before or after row summary: the inferred schema read those
+  fields as byte arrays and rejected the JSON objects the change feed writes.
+  They now get an open schema and stay embedded JSON (#61).
+- MultiIndex rerank keeps the primary index's distance as the first vote. A
+  candidate no secondary index returned used to score zero and rank first,
+  and with no secondary indices every result came back with distance zero in
+  map order (#57). MultiIndex and HybridIndex return nothing for a
+  non-positive k instead of panicking (#58).
+- HNSW and FlatIndex batch inserts validate every vector's dimension before
+  writing, so a batch with one bad vector leaves the index unchanged (#55,
+  #56).
+- A k-means cluster that attracts no vector keeps its centroid instead of
+  being reset to the origin, where it won encodes for any vector near zero
+  (#59). SearchBinary sorts in O(n log n) and keeps database order on equal
+  distances (#60).
+- Geo search between antipodal points returned NaN distances, so a point on
+  the far side of the globe was missing from KNN and whole-sphere radius
+  searches (#54).
+
 ## [2.132.0] - 2026-10-17
 
 ### Added
