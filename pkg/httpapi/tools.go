@@ -57,11 +57,14 @@ func callTool(tools *cortexdb.GraphRAGToolbox) http.HandlerFunc {
 
 		result, err := tools.Call(r.Context(), name, args)
 		if err != nil {
+			code := statusFor(err)
 			if strings.Contains(strings.ToLower(err.Error()), "unknown tool") {
-				writeError(w, http.StatusNotFound, err.Error())
-				return
+				code = http.StatusNotFound
 			}
-			writeError(w, statusFor(err), err.Error())
+			// To a confined key every 404 reads the same, this one included:
+			// its text can carry an id the caller sent.
+			code, message := oneNotFound(r.Context(), code, err.Error())
+			writeError(w, code, message)
 			return
 		}
 		writeJSON(w, http.StatusOK, result)

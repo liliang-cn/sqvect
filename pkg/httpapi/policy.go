@@ -103,17 +103,15 @@ func authorizeWith(db *cortexdb.DB) func(rr route, next http.HandlerFunc) http.H
 				// tool actually named, the same way the gRPC side does — from
 				// the tool's own declaration, never a second list — and deny a
 				// name the toolbox does not define, fail closed. A confined key
-				// is refused every tool: arguments are opaque JSON no scope can
-				// be checked against, which is also gRPC's rule.
+				// has its arguments checked against the allowlist line of the
+				// tool (authz.AuthorizeToolArgs), below, once clearance has
+				// passed; the route's own row check is skipped because the
+				// body is the tool's arguments, not a request of this route.
 				tool, _ := strings.CutPrefix(r.URL.Path, toolCallPrefix)
 				name = "POST " + toolCallPrefix + tool
 				access, known := authz.LookupTool(tool)
 				if !known {
 					writeError(w, http.StatusForbidden, "denied: "+tool+" is not a tool this server defines")
-					return
-				}
-				if !key.Scope.IsZero() {
-					writeError(w, http.StatusForbidden, "denied: key \""+key.ID+"\" is confined and a tool's arguments are opaque JSON no scope can be checked against")
 					return
 				}
 				m = authz.Method{Access: access, Rowless: true}
@@ -127,6 +125,42 @@ func authorizeWith(db *cortexdb.DB) func(rr route, next http.HandlerFunc) http.H
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
+			if rr.path == toolRoutePath && !key.Scope.IsZero() {
+				tool, _ := strings.CutPrefix(r.URL.Path, toolCallPrefix)
+				body, ok := bufferBody(w, r)
+				if !ok {
+					return
+				}
+				// Arguments that are not an object are the caller's mistake,
+				// not a denial.
+				if len(bytes.TrimSpace(body)) > 0 && !(isJSONObject(body) && json.Valid(body)) {
+					writeError(w, http.StatusBadRequest, "tool arguments must be a JSON object")
+					return
+				}
+				// The gates a confined key needs are forced into the body
+				// first, so the tool is called with exactly the arguments the
+				// policy checked. See authz.Key.ConfineToolArgs.
+				body = key.ConfineToolArgs(tool, body)
+				if err := key.AuthorizeToolArgs(tool, body); err != nil {
+					writeError(w, http.StatusForbidden, err.Error())
+					return
+				}
+				// A tool that names a row by id may only touch a row within
+				// the scope; a row the key may not have is 404, like one that
+				// does not exist. See authz.Scope.GuardToolRows. With no
+				// database to read the rows from, the guard cannot decide,
+				// and a guard that cannot decide refuses.
+				if db == nil {
+					writeError(w, http.StatusInternalServerError, "denied: key \""+key.ID+"\" is confined and the tool route has no database to guard rows against")
+					return
+				}
+				if err := key.Scope.GuardToolRows(r.Context(), db, tool, body); err != nil {
+					writeError(w, toolGuardStatus(err), err.Error())
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				r.ContentLength = int64(len(body))
+			}
 			if key.Scope.IsZero() || m.Rowless {
 				next(w, r)
 				return
@@ -139,12 +173,108 @@ func authorizeWith(db *cortexdb.DB) func(rr route, next http.HandlerFunc) http.H
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
+			if tw, typed := typedWriteTools[rr.String()]; typed {
+				body, _ := bufferBody(w, r)
+				if args, decoded := tw.args(body); decoded {
+					if err := key.AuthorizeToolArgs(tw.tool, args); err != nil {
+						writeError(w, http.StatusForbidden, err.Error())
+						return
+					}
+				}
+			}
 			if u, upserts := upsertRoutes[rr.String()]; upserts && !guardUpsert(w, r, db, key.Scope, u) {
 				return
 			}
 			next(w, r)
 		}
 	}
+}
+
+// typedWriteTools are the typed writes a confined key may call, each with
+// the tool it stands for. A typed write takes what the allowlist line of its
+// tool takes, so the route and POST /v1/tools/<name> cannot disagree on what
+// a confined key may send: declared entities and relations write the shared
+// graph, and some metadata keys are the engine's. The typed writes of the
+// shared graph name no scope field, so a confined key never reaches them.
+var typedWriteTools = map[string]typedWrite{
+	"POST /v1/knowledge": {"knowledge_save", knowledgeToolArgs},
+	"POST /v1/memory":    {"memory_save", memoryToolArgs},
+}
+
+type typedWrite struct {
+	tool string
+	args func(body []byte) ([]byte, bool)
+}
+
+// decodeTyped decodes a typed write's body the way the handler will
+// (decodeBody), so the check reads what the handler reads: the decoder
+// matches a field name by Unicode case folding, so "Entities" and
+// "entitieſ" are its Entities, which a check by name would miss. A body the
+// decoder refuses is left to the handler, which answers it 400 with the same
+// decoder before anything is written, as on main. That is also the answer to
+// a key that reaches no row of the route's store: the scope field it must
+// send (collection on the memory route, user_id, scope or namespace on the
+// knowledge route) is not a field of the route, and a body without it is
+// the row checks' 403.
+func decodeTyped(body []byte, req any) bool {
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.DisallowUnknownFields()
+	return dec.Decode(req) == nil
+}
+
+// knowledgeToolArgs and memoryToolArgs hand the allowlist, of a decoded
+// typed write, the arguments it shares with its tool: the scope fields,
+// metadata, and entities and relations when the body declares any. The
+// scope fields and the row were checked as for any typed route. The facade
+// signs both typed writes (cortexdb.WithWriter replaces written_by and drops
+// updated_by), so those two metadata keys are not handed over: a row read
+// back and sent again is not refused for the signature it carries. Another
+// spelling is not replaced, and keeps the refusal.
+func knowledgeToolArgs(body []byte) ([]byte, bool) {
+	var req cortexdb.KnowledgeSaveRequest
+	if !decodeTyped(body, &req) {
+		return nil, false
+	}
+	args := map[string]any{authz.FieldCollection: req.Collection}
+	meta := make(map[string]any, len(req.Metadata))
+	for k, v := range req.Metadata {
+		meta[k] = v
+	}
+	return typedToolArgs(args, meta, len(req.Entities), len(req.Relations)), true
+}
+
+func memoryToolArgs(body []byte) ([]byte, bool) {
+	var req cortexdb.MemorySaveRequest
+	if !decodeTyped(body, &req) {
+		return nil, false
+	}
+	args := map[string]any{}
+	for field, v := range map[string]string{authz.FieldUserID: req.UserID, authz.FieldScope: req.Scope, authz.FieldNamespace: req.Namespace} {
+		if v != "" {
+			args[field] = v
+		}
+	}
+	meta := make(map[string]any, len(req.Metadata))
+	for k, v := range req.Metadata {
+		meta[k] = v
+	}
+	return typedToolArgs(args, meta, len(req.Entities), len(req.Relations)), true
+}
+
+func typedToolArgs(args, meta map[string]any, entities, relations int) []byte {
+	delete(meta, "written_by")
+	delete(meta, "updated_by")
+	if len(meta) > 0 {
+		args["metadata"] = meta
+	}
+	if entities > 0 {
+		args["entities"] = []any{}
+	}
+	if relations > 0 {
+		args["relations"] = []any{}
+	}
+	raw, _ := json.Marshal(args)
+	return raw
 }
 
 // sparqlToolName is the one tool whose classification is decided per call.
@@ -286,5 +416,32 @@ func valuesIn(v any, field string, depth int) []string {
 		return out
 	default:
 		return nil
+	}
+}
+
+// oneNotFound spells every 404 a tool returns to a confined key the way the
+// row guard spells a row the key may not have: "not found" and nothing else.
+// The tool's own wording names the kind of row, or the store that missed it,
+// and a confined key that could read it would tell a row that does not exist
+// from a row it may not have: the oracle the guard exists to close. An
+// unconfined key keeps the tool's wording, which is its diagnostic.
+func oneNotFound(ctx context.Context, status int, message string) (int, string) {
+	if key, ok := keyFrom(ctx); ok && !key.Scope.IsZero() && status == http.StatusNotFound {
+		return status, authz.ErrWithheld.Error()
+	}
+	return status, message
+}
+
+// toolGuardStatus maps a row-guard failure to its HTTP status: a row the key
+// may not have is 404, like one that does not exist; a call the guard refuses
+// on its own is 403; anything else is the database failing, 500.
+func toolGuardStatus(err error) int {
+	switch {
+	case errors.Is(err, authz.ErrWithheld):
+		return http.StatusNotFound
+	case errors.Is(err, authz.ErrDenied):
+		return http.StatusForbidden
+	default:
+		return http.StatusInternalServerError
 	}
 }

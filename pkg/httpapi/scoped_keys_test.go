@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -335,5 +337,117 @@ func TestOverRESTARecallStaysInsideTheKeysScope(t *testing.T) {
 	if code, body := do(t, srv, http.MethodPost, "/v1/recall", "op-secret",
 		`{"query":"Orpheus earns","collection":"secrets","entity_names":["Orpheus"]}`); code != http.StatusOK || !strings.Contains(string(body), "SECRETSALARY") {
 		t.Fatalf("the operator lost the recall (%d): %s", code, body)
+	}
+}
+
+// The tool route checks a confined key's arguments against the scope fields
+// the tool declares, exactly as gRPC does, instead of refusing every tool.
+func TestAConfinedKeyMayCallToolsWithinItsScopeOverHTTP(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{
+		{ID: "notes", Secret: "notes-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{Collection: "notes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newPolicyServer(t, Options{Keys: ks})
+
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/ingest_document", "notes-secret",
+		`{"document_id":"n1","content":"A note about the ledger.","collection":"notes"}`, http.StatusOK)
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_search", "notes-secret",
+		`{"query":"ledger","collection":"notes","top_k":3}`, http.StatusOK)
+
+	msg := wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_search", "notes-secret",
+		`{"query":"ledger","collection":"secrets"}`, http.StatusForbidden)
+	if !strings.Contains(msg, `asks for "secrets"`) {
+		t.Fatalf("refusal %q should name the collection asked for", msg)
+	}
+	msg = wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_search", "notes-secret",
+		`{"query":"ledger"}`, http.StatusForbidden)
+	if !strings.Contains(msg, "leaves collection unset") {
+		t.Fatalf("refusal %q should say the collection is unset", msg)
+	}
+	msg = wantStatus(t, srv, http.MethodPost, "/v1/tools/graph_statistics", "notes-secret", `{}`, http.StatusForbidden)
+	if !strings.Contains(msg, "not a tool a confined key may call") {
+		t.Fatalf("refusal %q should say the tool is off the allowlist", msg)
+	}
+	// Arguments that are not an object are the caller's mistake, not a denial.
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_search", "notes-secret", `[1]`, http.StatusBadRequest)
+	// An empty body is no arguments at all, which the policy answers (the
+	// collection is missing), not a syntax error.
+	msg = wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_search", "notes-secret", ``, http.StatusForbidden)
+	if !strings.Contains(msg, "collection") {
+		t.Fatalf("refusal %q should say the collection is missing", msg)
+	}
+}
+
+// The REST tool route applies the same row check as CallTool: naming another
+// collection's row with one's own collection is 404, not a write.
+func TestAConfinedKeyCannotReachAnotherRowByIDOverHTTP(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{
+		{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite},
+		{ID: "notes", Secret: "notes-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{Collection: "notes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newPolicyServer(t, Options{Keys: ks})
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_save", "op-secret",
+		`{"knowledge_id":"secret-doc","content":"The secret retainer.","collection":"secrets"}`, http.StatusOK)
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_update", "notes-secret",
+		`{"knowledge_id":"secret-doc","collection":"notes","content":"overwritten"}`, http.StatusNotFound)
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/ingest_document", "notes-secret",
+		`{"document_id":"secret-doc","collection":"notes","content":"overwritten"}`, http.StatusNotFound)
+	// A new row of its own is fine.
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_save", "notes-secret",
+		`{"knowledge_id":"n-1","content":"A note.","collection":"notes"}`, http.StatusOK)
+}
+
+// The tool route fails closed on what it cannot decide for a confined key: a
+// body it cannot buffer is refused before any check, and a row read that
+// fails is reported as a server error, never as a pass and never as 404.
+func TestTheToolRouteFailsClosedForAConfinedKey(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{
+		{ID: "notes", Secret: "notes-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{Collection: "notes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, dbPath := newTestDB(t)
+	handler, err := NewWithPolicy(db, Options{Keys: ks, DBPath: dbPath})
+	if err != nil {
+		t.Fatalf("build server: %v", err)
+	}
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	huge := `{"query":"` + strings.Repeat("x", maxRequestBytes+1) + `","collection":"notes"}`
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_search", "notes-secret", huge, http.StatusRequestEntityTooLarge)
+
+	// The database goes away between the argument check and the row check:
+	// the read fails, and the failure is what the caller sees.
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/knowledge_update", "notes-secret",
+		`{"knowledge_id":"n-1","collection":"notes","content":"x"}`, http.StatusInternalServerError)
+}
+
+// Each way the row guard can fail has its own status: a row outside the scope
+// is 404, a call the guard refuses on its own is 403, a database failure 500.
+func TestARowGuardFailureHasItsOwnStatus(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want int
+	}{
+		{fmt.Errorf("knowledge %q %w", "n-1", authz.ErrWithheld), http.StatusNotFound},
+		{fmt.Errorf("%w: no_such_tool is not a tool this server defines", authz.ErrDenied), http.StatusForbidden},
+		{errors.New("sql: database is closed"), http.StatusInternalServerError},
+	} {
+		if got := toolGuardStatus(tc.err); got != tc.want {
+			t.Fatalf("%v: status %d, want %d", tc.err, got, tc.want)
+		}
 	}
 }
