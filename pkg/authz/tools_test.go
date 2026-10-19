@@ -86,11 +86,12 @@ func TestACallWhoseToolNameCannotBeReadIsDenied(t *testing.T) {
 	}
 }
 
-func TestAConfinedKeyCannotCallToolsAtAll(t *testing.T) {
-	// A CallTool request carries a name and a string of JSON. The row checks
-	// read proto fields, so they see the string and not the user_id inside it
-	// — and every tool, memory_search included, is reachable through here. A
-	// confinement that cannot be checked is refused rather than dropped.
+func TestAConfinedKeyIsRefusedCallToolByTheRequestMessageCheck(t *testing.T) {
+	// A CallTool request carries a name and a string of JSON. The row check
+	// over the request message sees the string and not the user_id inside it
+	// — and every tool, memory_search included, is reachable through here. So
+	// AuthorizeRows refuses, whatever the lookup claims, and the server has to
+	// route CallTool through AuthorizeToolArgs, which reads the arguments.
 	key := Key{ID: "hermes", Secret: "h", Clearance: ReadWrite, Scope: Scope{UserID: "hermes"}}
 	err := key.AuthorizeRows(CallToolMethod, func(string) (string, []string, bool) {
 		// Deliberately generous: even a lookup that claims the request carries
@@ -100,8 +101,8 @@ func TestAConfinedKeyCannotCallToolsAtAll(t *testing.T) {
 	if !errors.Is(err, ErrDenied) {
 		t.Fatalf("a confined key reached the whole toolbox: %v", err)
 	}
-	if !strings.Contains(err.Error(), "opaque JSON") {
-		t.Fatalf("the denial should say why the scope cannot be checked, got %q", err)
+	if !strings.Contains(err.Error(), "AuthorizeToolArgs") {
+		t.Fatalf("the denial should point at the argument check, got %q", err)
 	}
 
 	// An unconfined key is unaffected — this is a scope rule, not a ban.

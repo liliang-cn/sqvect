@@ -117,6 +117,12 @@ func (db *DB) SaveMemory(ctx context.Context, req MemorySaveRequest) (*MemorySav
 	if err := db.checkMemoryWrite(ctx, bucketID, req.UserID, MemoryBucket{UserID: owner, Scope: scope, Namespace: namespace}); err != nil {
 		return nil, err
 	}
+	// A supersede target that does not exist is refused before anything is
+	// written, so the new row is absent after a missing target exactly as
+	// after a foreign one, which the ports refuse before the call.
+	if err := db.checkSupersedeTargets(ctx, req.MemoryID, req.Supersedes); err != nil {
+		return nil, err
+	}
 	if err := db.ensureMemoryBucket(ctx, bucketID, owner, scope, namespace); err != nil {
 		return nil, err
 	}
@@ -220,6 +226,13 @@ func (db *DB) UpdateMemory(ctx context.Context, req MemoryUpdateRequest) (*Memor
 }
 
 // GetMemory fetches a memory record by ID.
+//
+// The list form lists a row the caller's scope does not reach under missing,
+// in the order asked, exactly as a row that does not exist: a confined
+// caller cannot tell the two apart. The single form stays unconfined on
+// purpose: the row guard of the ports (authz.Scope.GuardToolRows) reads
+// through it to refuse a write to a foreign row, and a facade that hid the
+// row there would hand the guard a row that does not exist.
 func (db *DB) GetMemory(ctx context.Context, req MemoryGetRequest) (*MemoryGetResponse, error) {
 	if len(req.MemoryIDs) > 0 {
 		resp := &MemoryGetResponse{}
@@ -231,6 +244,12 @@ func (db *DB) GetMemory(ctx context.Context, req MemoryGetRequest) (*MemoryGetRe
 			}
 			if err != nil {
 				return nil, err
+			}
+			if ok, err := db.memoryReadPermitted(ctx, row.record.SessionID); err != nil {
+				return nil, err
+			} else if !ok {
+				resp.Missing = append(resp.Missing, id)
+				continue
 			}
 			resp.Memories = append(resp.Memories, row.record)
 		}
@@ -1259,6 +1278,31 @@ func memorySuperseded(record MemoryRecord) bool {
 	}
 	v, _ := record.Metadata["superseded_by"].(string)
 	return strings.TrimSpace(v) != ""
+}
+
+// checkSupersedeTargets refuses a supersede target that does not exist,
+// before the save writes anything.
+func (db *DB) checkSupersedeTargets(ctx context.Context, newID string, targets []string) error {
+	for _, target := range targets {
+		target = strings.TrimSpace(target)
+		if target == "" || target == newID {
+			continue
+		}
+		row, err := db.loadMemoryRow(ctx, target)
+		if err != nil {
+			return fmt.Errorf("supersede %q: %w", target, err)
+		}
+		// A target outside the caller's scope is not found, as a missing
+		// one is, the way memory_get lists it.
+		ok, err := db.memoryReadPermitted(ctx, row.record.SessionID)
+		if err != nil {
+			return fmt.Errorf("supersede %q: %w", target, err)
+		}
+		if !ok {
+			return fmt.Errorf("supersede %q: %w", target, core.ErrNotFound)
+		}
+	}
+	return nil
 }
 
 // markMemoriesSuperseded stamps each target as replaced by newID.

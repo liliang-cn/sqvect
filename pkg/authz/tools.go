@@ -97,20 +97,19 @@ func (k Key) AuthorizeCall(fullMethod string, tool ToolNameLookup) error {
 	return nil
 }
 
-// confinedCallToolDenial is why a confined key cannot use CallTool at all.
+// confinedCallToolDenial is what AuthorizeRows answers a confined key for
+// CallTool, whose request carries its arguments as a string of JSON that a
+// request-message lookup cannot see into.
 //
-// The row checks work by reading scope fields off the request message. A
-// CallTool request carries a tool name and a string of JSON: protoreflect sees
-// a string, not the user_id or collection inside it, so there is nothing for a
-// confinement to be compared against. Every tool in the toolbox is reachable
-// through this one RPC, which makes it the worst possible place to let a scope
-// quietly lapse — a key confined to one user could ask memory_search for
-// everybody's. Parsing the arguments per tool would mean a second copy of every
-// request shape living in the policy and going stale; refusing is honest and
-// says so in the error.
+// Every tool in the toolbox is reachable through this one RPC, which makes it
+// the worst possible place to let a scope quietly lapse — a key confined to one
+// user could ask memory_search for everybody's. So AuthorizeRows refuses, and
+// the server routes CallTool through AuthorizeToolArgs instead, which checks
+// the parsed arguments against the allowlist line of the named tool. A caller
+// that forgets to route gets this denial rather than an open door.
 func confinedCallToolDenial(k Key) error {
 	c := k.Scope.constraints()[0]
-	return fmt.Errorf("%w: key %q is confined to %s=%s and %s carries its arguments as opaque JSON, "+
-		"which no scope can be checked against — use the typed RPCs instead",
+	return fmt.Errorf("%w: key %q is confined to %s=%s and %s carries its arguments as opaque JSON; "+
+		"check them with AuthorizeToolArgs",
 		ErrDenied, k.ID, c.field, c, CallToolMethod)
 }
