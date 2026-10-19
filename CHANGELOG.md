@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.134.0] - 2026-10-19
+
+### Added
+
+- Saves are signed. Behind a key policy, memory_save, memory_update,
+  knowledge_save and knowledge_update record the authenticated key as
+  `written_by` (a save) or `updated_by` (an update, which keeps the original
+  `written_by`), replacing whatever the caller wrote under those names.
+  `cortexdb.WithWriter` does the same for an embedded server.
+- Memory search hits carry `via`, the retrievers that found them
+  (`semantic`, `keyword`, `graph`), and `similarity`, the raw vector
+  similarity before the importance and recency boosts that make `score`.
+- Auto-recall explains each hit, in the injected block and in the
+  cortexdb-live band: the retriever and its own score, the query terms the
+  hit contains, and where it came from (date, agent, source, model, key,
+  host, project, session, URL). The shared `legacy-token` is not shown as a
+  writer.
+- Captured memories record `agent`, `host` and `project` beside `session`.
+
+### Changed
+
+- Auto-recall asks with the conversation. The cortexdb-live planner gets the
+  project and the last four turns and resolves what the message points at
+  ("这个修复", "按建议", "the fix") before it writes the query. Without a
+  plan, and in the shell hook, the query carries the project and the start
+  of the last reply, so a short follow-up no longer recalls another
+  project's notes.
+
 ## [2.133.0] - 2026-10-19
 
 ### Added
