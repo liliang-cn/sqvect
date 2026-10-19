@@ -2,6 +2,7 @@ package rpcserver
 
 import (
 	"context"
+	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
@@ -312,5 +313,26 @@ func TestAKeyConfinedToSeveralCollectionsReachesEachOfThem(t *testing.T) {
 	// A row in a collection outside the list is withheld by id as well.
 	if _, err := knowledge.GetKnowledge(asKey("lf-secret"), &rpcv1.GetKnowledgeRequest{KnowledgeId: "k-team-acme"}); err != nil {
 		t.Fatalf("own row by id: %v", err)
+	}
+}
+
+func TestASaveIsSignedByTheKeyThatMadeItWhateverItClaims(t *testing.T) {
+	conn := newPolicyConn(t, Options{Keys: hermesAndZeus(t)})
+	tools := rpcv1.NewToolsServiceClient(conn)
+
+	resp, err := tools.CallTool(asKey("op-secret"), &rpcv1.CallToolRequest{
+		Name: "memory_save",
+		ArgsJson: `{"memory_id":"o1","scope":"global",` +
+			`"content":"The cache moved to node-b.","metadata":{"written_by":"hermes"}}`,
+	})
+	if err != nil {
+		t.Fatalf("operator save: %v", err)
+	}
+	var saved cortexdb.MemorySaveResponse
+	if err := json.Unmarshal([]byte(resp.GetResultJson()), &saved); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got := saved.Memory.Metadata["written_by"]; got != "operator" {
+		t.Fatalf("written_by = %v, want the key operator, not the hermes it claimed", got)
 	}
 }

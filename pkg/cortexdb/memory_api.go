@@ -10,6 +10,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -111,6 +112,7 @@ func (db *DB) SaveMemory(ctx context.Context, req MemorySaveRequest) (*MemorySav
 	}
 
 	metadata := buildMemoryMetadata(scope, normalizeMemoryNamespace(req.Namespace), req.Metadata, req.Importance, req.TTLSeconds)
+	stampWriter(ctx, metadata, anyString)
 	vectorBytes, err := db.embedMemoryContent(ctx, req.Content)
 	if err != nil {
 		return nil, err
@@ -186,6 +188,7 @@ func (db *DB) UpdateMemory(ctx context.Context, req MemoryUpdateRequest) (*Memor
 		ttlSeconds = *req.TTLSeconds
 	}
 	metadata = buildMemoryMetadata(row.record.Scope, row.record.Namespace, metadata, importance, ttlSeconds)
+	stampUpdater(ctx, metadata, row.record.Metadata, anyString)
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal memory metadata: %w", err)
@@ -389,8 +392,10 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 						continue
 					}
 					semanticHits = append(semanticHits, MemorySearchHit{
-						Memory: record,
-						Score:  applyMemoryRecallBoosts(sm.Score, record, now),
+						Memory:     record,
+						Score:      applyMemoryRecallBoosts(sm.Score, record, now),
+						Similarity: sm.Score,
+						Via:        []string{memoryViaSemantic},
 					})
 				}
 				sort.SliceStable(semanticHits, func(i, j int) bool { return semanticHits[i].Score > semanticHits[j].Score })
@@ -413,6 +418,7 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 		if err != nil {
 			return nil, err
 		}
+		tagMemoryHits(graphHits, memoryViaGraph)
 		if len(graphHits) >= req.TopK {
 			graphHits = graphHits[:req.TopK]
 			if recordRecalls {
@@ -435,6 +441,7 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 		}
 		hits = nil // semantic already answered; lexical failing must not erase it
 	}
+	tagMemoryHits(hits, memoryViaKeyword)
 	if len(semanticHits) > 0 {
 		if isBareKeyword(resolution.Plan.Query) && len(hits) > 0 {
 			hits = mergeMemoryHits(hits, semanticHits, req.TopK)
@@ -1081,16 +1088,17 @@ func mergeMemoryHits(graphHits, lexicalHits []MemorySearchHit, topK int) []Memor
 		topK = len(graphHits) + len(lexicalHits)
 	}
 	merged := make([]MemorySearchHit, 0, topK)
-	seen := make(map[string]struct{}, topK)
+	seen := make(map[string]int, topK)
 	for _, group := range [][]MemorySearchHit{graphHits, lexicalHits} {
 		for _, hit := range group {
-			if len(merged) >= topK {
-				return merged
-			}
-			if _, ok := seen[hit.Memory.ID]; ok {
+			if i, ok := seen[hit.Memory.ID]; ok {
+				merged[i].Via = unionVia(merged[i].Via, hit.Via)
 				continue
 			}
-			seen[hit.Memory.ID] = struct{}{}
+			if len(merged) >= topK {
+				continue
+			}
+			seen[hit.Memory.ID] = len(merged)
 			merged = append(merged, hit)
 		}
 	}
@@ -1122,6 +1130,8 @@ func fuseMemoryHits(semanticHits, lexicalHits []MemorySearchHit, topK int) []Mem
 				f = &fused{hit: hit, firstPos: len(order)}
 				byID[hit.Memory.ID] = f
 				order = append(order, f)
+			} else {
+				f.hit.Via = unionVia(f.hit.Via, hit.Via)
 			}
 			f.rrf += 1.0 / (hybridRRFK + float64(rank+1))
 			if lexical {
@@ -1149,6 +1159,29 @@ func fuseMemoryHits(semanticHits, lexicalHits []MemorySearchHit, topK int) []Mem
 		out = append(out, f.hit)
 	}
 	return out
+}
+
+// The retrievers a memory hit can owe its place to (MemorySearchHit.Via).
+const (
+	memoryViaSemantic = "semantic"
+	memoryViaKeyword  = "keyword"
+	memoryViaGraph    = "graph"
+)
+
+func tagMemoryHits(hits []MemorySearchHit, via string) {
+	for i := range hits {
+		hits[i].Via = unionVia(hits[i].Via, []string{via})
+	}
+}
+
+// unionVia adds the retrievers in more to via, each once, in the order found.
+func unionVia(via, more []string) []string {
+	for _, v := range more {
+		if !slices.Contains(via, v) {
+			via = append(via, v)
+		}
+	}
+	return via
 }
 
 // isBareKeyword reports a query that is a single term — an acronym, a name,

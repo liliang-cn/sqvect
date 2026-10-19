@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
+	cortexdb "github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
 	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 )
 
@@ -16,6 +19,9 @@ type recallHit struct {
 	KnowledgeID string `json:"knowledge_id"`
 	Title       string `json:"title"`
 	Snippet     string `json:"snippet"`
+	// Trail is where the hit came from and why it came back, written into
+	// the line so the agent can weigh it: see trailOf.
+	Trail string `json:"-"`
 }
 
 // recallToolName is the shared-brain tool the hook asks. It fuses episodic
@@ -44,22 +50,26 @@ const recallSnippetRunes = 220
 //
 // Silent on every failure, like the local path: the hook must never block or
 // delay the user's prompt with an error.
-func runRecallRemote(addr, token, prompt string, topK int) string {
+func runRecallRemote(addr, token, prompt string, situation recallSituation, topK int) string {
 	conn, err := dialCortexDB(addr, token)
 	if err != nil {
 		return ""
 	}
 	defer func() { _ = conn.Close() }()
 
-	args, err := json.Marshal(map[string]any{
-		"query":           prompt,
-		"keywords":        keywordsFromPrompt(prompt),
+	request := map[string]any{
+		"query":           situation.query(prompt),
+		"keywords":        situation.keywords(prompt),
 		"top_k_memories":  topK,
 		"top_k_knowledge": topK,
 		// Graph expansion earns its keep on relational prompts ("who uses X"),
 		// but this runs before every single message: light traversal only.
 		"graph_light": true,
-	})
+	}
+	if situation.Project != "" {
+		request["entity_names"] = []string{situation.Project}
+	}
+	args, err := json.Marshal(request)
 	if err != nil {
 		return ""
 	}
@@ -94,33 +104,167 @@ func parseRecallPayload(body string) ([]recallHit, error) {
 		return nil, nil
 	}
 	var payload struct {
-		Memories []struct {
-			Memory struct {
-				ID      string `json:"id"`
-				Content string `json:"content"`
-			} `json:"memory"`
-		} `json:"memories"`
-		Knowledge []recallHit `json:"knowledge"`
-		Results   []recallHit `json:"results"`
+		cortexdb.KnowledgeMemoryRecallResponse
+		Results []cortexdb.KnowledgeSearchHit `json:"results"`
 	}
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		return nil, fmt.Errorf("recall payload is not search results: %w", err)
 	}
+	if len(payload.Memories) == 0 && len(payload.Knowledge) == 0 {
+		payload.Knowledge = payload.Results
+	}
+	return hitsFromRecall(&payload.KnowledgeMemoryRecallResponse), nil
+}
 
-	hits := make([]recallHit, 0, len(payload.Memories)+len(payload.Knowledge))
-	// Memories first: they are the layer that changes, and the one a stale
-	// answer hurts most.
-	for _, m := range payload.Memories {
+// hitsFromRecall turns a recall answer into injectable hits, each with its
+// trail. Memories first: they are the layer that changes, and the one a stale
+// answer hurts most.
+func hitsFromRecall(resp *cortexdb.KnowledgeMemoryRecallResponse) []recallHit {
+	hits := make([]recallHit, 0, len(resp.Memories)+len(resp.Knowledge))
+	for _, m := range resp.Memories {
+		meta := m.Memory.Metadata
+		date := metaString(meta, "date")
+		if date == "" && !m.Memory.CreatedAt.IsZero() {
+			date = m.Memory.CreatedAt.UTC().Format("2006-01-02")
+		}
 		hits = append(hits, recallHit{
 			KnowledgeID: m.Memory.ID,
 			Snippet:     snippetOf(m.Memory.Content),
+			Trail: trailOf(hitOrigin{
+				Date:    date,
+				Writer:  metaString(meta, "written_by"),
+				Source:  metaString(meta, "source"),
+				Model:   metaString(meta, "model"),
+				Agent:   metaString(meta, "agent"),
+				Host:    metaString(meta, "host"),
+				Project: metaString(meta, "project"),
+				Session: metaString(meta, "session"),
+			}, memoryVia(m, resp.MemoryDecision.EffectiveMode)),
 		})
 	}
-	hits = append(hits, payload.Knowledge...)
-	if len(hits) == 0 {
-		return payload.Results, nil
+	for _, k := range resp.Knowledge {
+		meta := k.Metadata
+		date := firstRunes(firstNonEmptyStr(meta["updated"], meta["date"]), 10)
+		hits = append(hits, recallHit{
+			KnowledgeID: k.KnowledgeID,
+			Title:       k.Title,
+			Snippet:     k.Snippet,
+			Trail: trailOf(hitOrigin{
+				Date:    date,
+				Writer:  meta["written_by"],
+				Source:  firstNonEmptyStr(k.Author, meta["source"]),
+				Agent:   meta["agent"],
+				Host:    meta["host"],
+				Project: meta["project"],
+				Session: meta["session"],
+				URL:     k.SourceURL,
+			}, knowledgeVia(k, resp.KnowledgeDecision.EffectiveMode)),
+		})
 	}
-	return hits, nil
+	return hits
+}
+
+// hitOrigin is what a hit's writer left on it.
+type hitOrigin struct {
+	Date, Writer, Source, Model, Agent, Host, Project, Session, URL string
+}
+
+// sharedKey is the one token every client of an unkeyed brain speaks with: it
+// names nobody in particular, so a trail leaves it out.
+const sharedKey = "legacy-token"
+
+// trailOf is a hit's bracket: the date, who wrote it, from which machine,
+// project and session, and the score of the retriever that found it. The
+// cortexdb-live mod writes the same words (hooks/register.tsx, trailOf).
+func trailOf(o hitOrigin, why string) string {
+	var by []string
+	for _, part := range []string{o.Agent, o.Source} {
+		if part != "" {
+			by = append(by, part)
+		}
+	}
+	if o.Model != "" {
+		by = append(by, "("+o.Model+")")
+	}
+	parts := []string{o.Date, strings.Join(by, " ")}
+	if o.Writer != "" && o.Writer != sharedKey {
+		parts = append(parts, "key "+o.Writer)
+	}
+	if o.Host != "" {
+		parts = append(parts, "host "+o.Host)
+	}
+	if o.Project != "" {
+		parts = append(parts, "project "+o.Project)
+	}
+	if o.Session != "" {
+		parts = append(parts, "session "+firstRunes(o.Session, 8))
+	}
+	parts = append(parts, o.URL, why)
+	kept := parts[:0]
+	for _, p := range parts {
+		if p != "" {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, " · ")
+}
+
+// memoryVia names the retrievers that found a memory, with the raw similarity
+// when meaning was one of them. The hit's score is that similarity after
+// importance and recency boosts, so it is never shown as one. A brain before
+// v2.134 names neither: its decision says which mode ran.
+func memoryVia(m cortexdb.MemorySearchHit, mode string) string {
+	has := func(v string) bool { return slices.Contains(m.Via, v) }
+	similarity := ""
+	if m.Similarity > 0 {
+		similarity = " " + strconv.FormatFloat(m.Similarity, 'f', 2, 64)
+	}
+	switch {
+	case has("semantic") && has("keyword"):
+		return "semantic" + similarity + " + keyword"
+	case has("semantic"):
+		return "semantic" + similarity
+	case has("graph"):
+		return "graph"
+	case has("keyword"):
+		return "keyword"
+	case mode == cortexdb.RetrievalModeGraph:
+		return "graph"
+	case mode == cortexdb.RetrievalModeLexical:
+		return "keyword"
+	}
+	return "semantic"
+}
+
+// knowledgeVia names the retriever that found a knowledge hit, with the score
+// each gave it. The fused score beside them only orders the list.
+func knowledgeVia(k cortexdb.KnowledgeSearchHit, mode string) string {
+	n := func(v float64) string { return strconv.FormatFloat(v, 'f', 2, 64) }
+	switch {
+	case k.VectorScore > 0 && k.LexicalScore > 0:
+		return "semantic " + n(k.VectorScore) + " + keyword " + n(k.LexicalScore)
+	case k.VectorScore > 0:
+		return "semantic " + n(k.VectorScore)
+	case k.LexicalScore > 0:
+		return "keyword " + n(k.LexicalScore)
+	case mode == cortexdb.RetrievalModeGraph:
+		return "graph"
+	case mode == cortexdb.RetrievalModeLexical:
+		return "keyword"
+	}
+	return "semantic"
+}
+
+func metaString(meta map[string]any, key string) string {
+	s, _ := meta[key].(string)
+	return strings.TrimSpace(s)
+}
+
+func firstRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 // snippetOf flattens a memory into one injectable line: whitespace collapsed
@@ -146,6 +290,9 @@ func formatRecallHits(hits []recallHit) string {
 		title := hit.Title
 		if title == "" {
 			title = hit.KnowledgeID
+		}
+		if hit.Trail != "" {
+			title += " [" + hit.Trail + "]"
 		}
 		lines = append(lines, "- "+title+": "+snippet)
 	}

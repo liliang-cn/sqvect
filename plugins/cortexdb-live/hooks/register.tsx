@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
-import type { CaptureMark, CapturedMemory, Recall, RecallHit, RecallPlan } from '../types'
+import type { CaptureMark, CapturedMemory, HitOrigin, HitWhy, Recall, RecallHit, RecallPlan } from '../types'
 
 const last = atom({ plugin: 'cortexdb-live', key: 'last' } as const, null)
 const isOpen = atom({ plugin: 'cortexdb-live', key: 'isOpen' } as const, false)
@@ -40,6 +40,13 @@ const STRINGS = {
     knowledge: '知识',
     query: '查询',
     entities: '实体',
+    project: '项目',
+    why: '依据',
+    via: { semantic: '语义', keyword: '关键词', hybrid: '语义+关键词', graph: '图谱' },
+    matched: '命中',
+    from: '来源',
+    session: '会话',
+    key: 'key',
     nodes: (n: string) => `${n} 节点`,
     recallTime: (s: string) => `召回 ${s}s`,
     skipped: '这条不用召回',
@@ -62,6 +69,13 @@ const STRINGS = {
     knowledge: 'knowledge',
     query: 'Query',
     entities: 'Entities',
+    project: 'Project',
+    why: 'why',
+    via: { semantic: 'semantic', keyword: 'keyword', hybrid: 'semantic+keyword', graph: 'graph' },
+    matched: 'matched',
+    from: 'from',
+    session: 'session',
+    key: 'key',
     nodes: (n: string) => `${n} nodes`,
     recallTime: (s: string) => `recall ${s}s`,
     skipped: 'no recall needed',
@@ -84,6 +98,9 @@ let lang: Lang = 'en'
 let brain: Brain = {}
 let idleTimer: { cancel: () => void } | undefined
 let isCapturing = false
+// Recorded on every memory a capture writes, so a recall can say which machine
+// and which project a memory came from.
+let host: string | undefined
 
 const t = () => STRINGS[lang]
 
@@ -161,14 +178,15 @@ async function sentinel($: EngineInterface, name: 'autorecall' | 'autocapture') 
 
 const PLAN_SYSTEM = `You plan a lookup in a long-term memory and knowledge-graph store that a coding assistant keeps across sessions: user preferences, project decisions, deployments, hosts, versions, lessons.
 
-Given the user's new message (and the assistant's previous reply for context), answer with JSON only:
+Given the user's new message, the project the session works in and the recent conversation, answer with JSON only:
 {"skip":false,"query":"...","keywords":["..."],"alternate_queries":["..."],"entity_names":["..."],"retrieval_mode":"auto"}
 
 - skip: true only when the message needs nothing remembered: a bare acknowledgement or go-ahead ("ok", "好", "发", "继续", "👌") whose subject the previous reply already settles.
-- query: the message restated as a self-contained lookup.
+- The message often points into the conversation instead of naming its subject: 这个, 那个, 它, 上面, 刚才, 按建议, 这个修复, this, that, it, the fix, the suggestion. Resolve every such pointer from the recent conversation and name the concrete thing it means (project, component, bug, command, file). A lookup that keeps the bare pointer word finds nothing, or finds the wrong project.
+- query: the message restated as a self-contained lookup that names its subject and, when the message is about the work in it, the project.
 - keywords: up to 12 terms the stored text would contain: names, project and host names, versions, abbreviations, synonyms, and BOTH Chinese and English forms of each concept.
 - alternate_queries: up to 3 other phrasings.
-- entity_names: up to 6 exact names of concrete things (projects, services, hosts, people, tools).
+- entity_names: up to 6 exact names of concrete things (projects, services, hosts, people, tools), the project among them when the message is about it.
 - retrieval_mode: "graph" for relational questions (who uses X, what X depends on, how A relates to B), else "auto".`
 
 type PlanReply = {
@@ -182,23 +200,68 @@ type PlanReply = {
 
 type Planned = { args: Record<string, unknown>; plan: RecallPlan; skip: boolean }
 
+// What a message is said against: the project the session works in and the
+// last few turns. "这个修复前后可以验证吗" names nothing by itself; asked
+// bare, it recalls whatever other project once fixed and verified something.
+type Situation = { project?: string; turns: Message[] }
+
+const RECENT_TURNS = 4
+
+async function situationOf($: EngineInterface, prompt: string): Promise<Situation> {
+  let project: string | undefined
+  try {
+    const root = await $.session.root()
+    // A session started in the home directory works in no project.
+    if (root && root !== (await $.env.get('HOME'))) project = root.split('/').filter(Boolean).at(-1)
+  } catch {
+    // A build without session.root: no project to name.
+  }
+  const history = await $.session.messages().catch(() => [])
+  const turns = (Array.isArray(history) ? history : [])
+    .map(m => ({ ...m, text: m.text.replace(NOISE, '').trim() }))
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && m.text !== '')
+  // The prompt being answered may already be the last turn.
+  if (turns.at(-1)?.role === 'user' && turns.at(-1)?.text === prompt) turns.pop()
+  return { project, turns: turns.slice(-RECENT_TURNS) }
+}
+
+const conversationOf = (s: Situation) =>
+  s.turns.map(m => `${m.role === 'user' ? 'USER' : 'ASSISTANT'}: ${clip(m.text, m.role === 'user' ? 300 : 800)}`).join('\n\n')
+
+// The fallback when no plan came back: the message with the project and the
+// start of the last reply after it, so the embedding lands near what the
+// conversation is about and not near every other project's "fix" and "verify".
+// The server embeds the query alone, so the context has to be in it.
+const situated = (prompt: string, s: Situation) => {
+  const previous = s.turns.filter(m => m.role === 'assistant').at(-1)?.text
+  const lines = [s.project ? `Project: ${s.project}` : '', previous ? `Context: ${clip(oneLine(previous), 300)}` : '']
+  const context = lines.filter(Boolean).join('\n')
+  return context ? `${prompt}\n\n${context}` : prompt
+}
+
 async function planRecall($: EngineInterface, prompt: string): Promise<Planned> {
   const started = await $.clock.now()
-  const lexical = keywordsOf(prompt)
+  const situation = await situationOf($, prompt)
+  const project = situation.project ? [situation.project] : []
+  const lexical = [...new Set([...keywordsOf(prompt), ...project])]
+  const query = situated(prompt, situation)
   const fallback: Planned = {
-    args: { query: prompt, keywords: lexical },
-    plan: { by: 'lexical', keywords: lexical, entities: [], mode: 'auto', ms: 0 },
+    args: { query, keywords: lexical, ...(project.length > 0 ? { entity_names: project } : {}) },
+    plan: { by: 'lexical', query, keywords: lexical, entities: project, mode: 'auto', ms: 0, project: situation.project },
     skip: false,
   }
 
-  const history = await $.session.messages().catch(() => [])
-  const previous = Array.isArray(history)
-    ? history.filter(m => m.role === 'assistant' && m.text.trim() !== '').at(-1)?.text
-    : undefined
+  const conversation = conversationOf(situation)
   const reply = await $.model.complete({
     model: PLANNER,
     system: PLAN_SYSTEM,
-    prompt: `${previous ? `Previous assistant reply:\n${clip(previous, 800)}\n\n` : ''}New user message:\n${clip(prompt, 2000)}`,
+    prompt: [
+      situation.project ? `Project: ${situation.project}` : '',
+      conversation ? `Recent conversation (oldest first):\n${conversation}` : '',
+      `New user message:\n${clip(prompt, 2000)}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
     maxTokens: 500,
     timeoutMs: PLAN_TIMEOUT_MS,
   })
@@ -209,15 +272,24 @@ async function planRecall($: EngineInterface, prompt: string): Promise<Planned> 
   const keywords = [...new Set([...strings(planned.keywords, 12), ...lexical])].slice(0, 24)
   const entities = strings(planned.entity_names, 6)
   const mode = planned.retrieval_mode === 'graph' || planned.retrieval_mode === 'lexical' ? planned.retrieval_mode : 'auto'
+  const asked = typeof planned.query === 'string' && planned.query.trim() !== '' ? planned.query : query
   return {
     args: {
-      query: typeof planned.query === 'string' && planned.query.trim() !== '' ? planned.query : prompt,
+      query: asked,
       keywords,
       alternate_queries: strings(planned.alternate_queries, 3),
       entity_names: entities,
       retrieval_mode: mode,
     },
-    plan: { by: 'haiku', keywords: strings(planned.keywords, 12), entities, mode, ms: (await $.clock.now()) - started },
+    plan: {
+      by: 'haiku',
+      query: asked,
+      keywords: strings(planned.keywords, 12),
+      entities,
+      mode,
+      ms: (await $.clock.now()) - started,
+      project: situation.project,
+    },
     skip: planned.skip === true,
   }
 }
@@ -232,19 +304,104 @@ async function recall($: EngineInterface, prompt: string): Promise<Recall | 'ski
     top_k_knowledge: TOP_K,
     graph_light: true,
   })) as RecallPayload
+  const terms = [...plan.keywords, ...plan.entities]
+  const memoryMode = payload.memory_decision?.effective_mode
+  const knowledgeMode = payload.knowledge_decision?.effective_mode
   const hits: RecallHit[] = [
-    ...(payload.memories ?? []).map(m => ({
-      kind: 'memory' as const,
-      title: m.memory?.id ?? '',
-      snippet: snippetOf(m.memory?.content ?? ''),
-    })),
+    ...(payload.memories ?? []).map(m => {
+      const content = m.memory?.content ?? ''
+      return {
+        kind: 'memory' as const,
+        title: m.memory?.id ?? '',
+        snippet: snippetOf(content),
+        why: { ...memoryVia(m, memoryMode), matched: matchedIn(content, terms) },
+        origin: memoryOrigin(m.memory),
+      }
+    }),
     ...(payload.knowledge ?? payload.results ?? []).map(k => ({
       kind: 'knowledge' as const,
       title: k.title || k.knowledge_id || '',
       snippet: snippetOf(k.snippet ?? ''),
+      why: { ...knowledgeVia(k, knowledgeMode), matched: matchedIn(`${k.title ?? ''} ${k.snippet ?? ''}`, terms) },
+      origin: knowledgeOrigin(k),
     })),
   ].filter(hit => hit.snippet !== '')
   return { hits, ms: (await $.clock.now()) - started, plan }
+}
+
+// The plan's terms a hit actually contains: the part of "why this came back"
+// a person can check by reading the line.
+const matchedIn = (text: string, terms: string[]) => {
+  const lower = text.toLowerCase()
+  return [...new Set(terms.filter(term => term.length >= 2 && lower.includes(term.toLowerCase())))].slice(0, 4)
+}
+
+// The retrievers that found a memory, as the brain names them, with the raw
+// similarity when meaning was one of them. The hit's score is that similarity
+// after importance and recency boosts, so it is never shown as one. A brain
+// before v2.134 names neither: its decision says which mode ran.
+const memoryVia = (m: MemoryHit, mode: string | undefined): Omit<HitWhy, 'matched'> => {
+  const via = m.via ?? []
+  const vector = typeof m.similarity === 'number' && m.similarity > 0 ? { vector: m.similarity } : {}
+  if (via.includes('semantic') && via.includes('keyword')) return { via: 'hybrid', ...vector }
+  if (via.includes('semantic')) return { via: 'semantic', ...vector }
+  if (via.includes('graph')) return { via: 'graph' }
+  if (via.includes('keyword')) return { via: 'keyword' }
+  if (mode === 'graph') return { via: 'graph' }
+  return { via: mode === 'lexical' ? 'keyword' : 'semantic' }
+}
+
+// The retriever that found a knowledge hit, read off the scores each one gave
+// it. The fused score beside them only orders the list.
+const knowledgeVia = (k: KnowledgeHit, mode: string | undefined): Omit<HitWhy, 'matched'> => {
+  const vector = k.vector_score && k.vector_score > 0 ? k.vector_score : undefined
+  const lexical = k.lexical_score && k.lexical_score > 0 ? k.lexical_score : undefined
+  if (vector !== undefined && lexical !== undefined) return { via: 'hybrid', vector, lexical }
+  if (vector !== undefined) return { via: 'semantic', vector }
+  if (lexical !== undefined) return { via: 'keyword', lexical }
+  if (mode === 'graph') return { via: 'graph' }
+  return { via: mode === 'lexical' ? 'keyword' : 'semantic' }
+}
+
+// The single shared token every client of an unkeyed brain speaks with names
+// nobody in particular, so it is left out rather than shown on every line.
+const SHARED_KEY = 'legacy-token'
+
+const text = (value: unknown) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
+
+const compact = (origin: HitOrigin): HitOrigin | undefined => {
+  const kept = Object.fromEntries(Object.entries(origin).filter(([, v]) => v !== undefined)) as HitOrigin
+  return Object.keys(kept).length > 0 ? kept : undefined
+}
+
+const memoryOrigin = (m: RecallMemory | undefined) => {
+  const meta = m?.metadata ?? {}
+  const writer = text(meta.written_by)
+  return compact({
+    date: text(meta.date) ?? text(m?.created_at)?.slice(0, 10),
+    writer: writer === SHARED_KEY ? undefined : writer,
+    source: text(meta.source),
+    model: text(meta.model),
+    agent: text(meta.agent),
+    host: text(meta.host),
+    project: text(meta.project),
+    session: text(meta.session)?.slice(0, 8),
+  })
+}
+
+const knowledgeOrigin = (k: KnowledgeHit) => {
+  const meta = k.metadata ?? {}
+  const writer = text(meta.written_by)
+  return compact({
+    date: (text(meta.updated) ?? text(meta.date))?.slice(0, 10),
+    writer: writer === SHARED_KEY ? undefined : writer,
+    source: text(k.author) ?? text(meta.source),
+    agent: text(meta.agent),
+    host: text(meta.host),
+    project: text(meta.project),
+    session: text(meta.session)?.slice(0, 8),
+    url: text(k.source_url),
+  })
 }
 
 // --- capture ----------------------------------------------------------------
@@ -431,6 +588,8 @@ async function capture($: EngineInterface) {
       // keeps absolute paths.
     }
     const { digest, userTurns } = digestOf(fresh, root)
+    const home = await $.env.get('HOME')
+    const project = root && root !== home ? root.split('/').filter(Boolean).at(-1) : undefined
     if (userTurns < CAPTURE_MIN_USER_TURNS) return
 
     const already = mark.memories.map(m => `- ${m.slug}: ${clip(m.content, 300)}`).join('\n')
@@ -474,7 +633,10 @@ async function capture($: EngineInterface) {
         importance: Math.min(1, Math.max(0, m.importance ?? 0.5)),
         metadata: {
           source: 'auto-capture',
+          agent: 'claude-code',
           session: sessionId,
+          ...(project ? { project } : {}),
+          ...(host ? { host } : {}),
           date: today(),
           type: m.type || 'fact',
           model: PLANNER,
@@ -515,6 +677,8 @@ export const register: Register = (on, options) => {
     await $.env.set('CORTEXDB_RECALL_BY_MOD', '1')
     await $.env.set('CORTEXDB_CAPTURE_BY_MOD', '1')
     await $.command.register({ name: SHOW_COMMAND, description: t().showCommand })
+    const named = await $.process.run(['hostname', '-s']).catch(() => undefined)
+    host = named?.exitCode === 0 ? named.stdout.trim() || undefined : undefined
     void refreshStats($)
     $.clock.every(STATS_EVERY_MS, () => void refreshStats($))
     return next(e)
@@ -600,13 +764,31 @@ export const register: Register = (on, options) => {
             {plan.entities.length > 0 ? ` | ${s.entities}: ${plan.entities.join(', ')}` : ''}
           </Text>
         )}
+        {open && plan.query && (
+          <Text wrap="truncate-end" dimColor>
+            {'  '}
+            {plan.project ? `${s.project} ${plan.project} · ` : ''}
+            {oneLine(plan.query)}
+          </Text>
+        )}
         {open &&
-          found.hits.map(hit => (
-            <Text wrap="truncate-end" dimColor>
-              {'  '}
-              {hit.kind === 'memory' ? s.memory : s.knowledge} <Text bold>{hit.title}</Text> {hit.snippet}
-            </Text>
-          ))}
+          found.hits.flatMap(hit => {
+            const explained = explainOf(hit, s)
+            return [
+              <Text wrap="truncate-end" dimColor>
+                {'  '}
+                {hit.kind === 'memory' ? s.memory : s.knowledge} <Text bold>{hit.title}</Text> {hit.snippet}
+              </Text>,
+              ...(explained
+                ? [
+                    <Text wrap="truncate-end" dimColor>
+                      {'      '}
+                      {explained}
+                    </Text>,
+                  ]
+                : []),
+            ]
+          })}
       </Box>
     )
   })
@@ -614,10 +796,27 @@ export const register: Register = (on, options) => {
 
 // --- text -------------------------------------------------------------------
 
+type RecallMemory = { id?: string; content?: string; metadata?: Record<string, unknown>; created_at?: string }
+
+type KnowledgeHit = {
+  knowledge_id?: string
+  title?: string
+  snippet?: string
+  author?: string
+  source_url?: string
+  vector_score?: number
+  lexical_score?: number
+  metadata?: Record<string, string>
+}
+
+type MemoryHit = { memory?: RecallMemory; score?: number; similarity?: number; via?: string[] }
+
 type RecallPayload = {
-  memories?: { memory?: { id?: string; content?: string; metadata?: { date?: unknown }; created_at?: string } }[]
-  knowledge?: { knowledge_id?: string; title?: string; snippet?: string }[]
-  results?: { knowledge_id?: string; title?: string; snippet?: string }[]
+  memory_decision?: { effective_mode?: string }
+  knowledge_decision?: { effective_mode?: string }
+  memories?: MemoryHit[]
+  knowledge?: KnowledgeHit[]
+  results?: KnowledgeHit[]
 }
 
 // The text the model reads: the same block the shell hook writes, so an agent
@@ -629,7 +828,10 @@ const contextOf = (hits: RecallHit[]) => {
   if (hits.length === 0) return ''
   const header = `${SHELL_HEADER} (retrieved automatically — verify before relying on them):`
   const footer = '(If this exchange states a durable preference, decision, or fact, save it with memory_save / knowledge_save.)'
-  const all = hits.map(hit => `- ${hit.title}: ${hit.snippet}`)
+  const all = hits.map(hit => {
+    const trail = trailOf(hit)
+    return `- ${hit.title}${trail ? ` [${trail}]` : ''}: ${hit.snippet}`
+  })
   let kept = all
   let note = ''
   const size = (parts: string[]) => parts.reduce((n, p) => n + [...p].length + 1, 0)
@@ -638,6 +840,59 @@ const contextOf = (hits: RecallHit[]) => {
     note = `(${all.length - kept.length} more not shown here; ask CortexDB for them with knowledge_memory_recall.)`
   }
   return [header, ...kept, ...(note ? [note] : []), footer].join('\n')
+}
+
+// Where a hit came from and why it came back, as one bracket the model can
+// weigh before relying on it: the date, who wrote it, from which session and
+// project, and the retriever's score. The same words the shell hook writes.
+const trailOf = (hit: RecallHit) => {
+  const o = hit.origin ?? {}
+  const by = [o.agent, o.source, o.model ? `(${o.model})` : undefined].filter(Boolean).join(' ')
+  const parts = [
+    o.date,
+    by || undefined,
+    o.writer ? `key ${o.writer}` : undefined,
+    o.host ? `host ${o.host}` : undefined,
+    o.project ? `project ${o.project}` : undefined,
+    o.session ? `session ${o.session}` : undefined,
+    o.url,
+    hit.why ? scoreOf(hit.why, VIA_EN) : undefined,
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
+const VIA_EN = STRINGS.en.via
+
+const scoreOf = (why: HitWhy, via: Record<HitWhy['via'], string>) => {
+  const n = (v: number) => v.toFixed(2)
+  if (why.via === 'hybrid' && why.vector !== undefined && why.lexical !== undefined) {
+    return `${via.semantic} ${n(why.vector)} + ${via.keyword} ${n(why.lexical)}`
+  }
+  if (why.via === 'hybrid' && why.vector !== undefined) return `${via.semantic} ${n(why.vector)} + ${via.keyword}`
+  const score = why.vector ?? why.lexical
+  return score === undefined ? via[why.via] : `${via[why.via]} ${n(score)}`
+}
+
+// The band's second line under a hit: why it came back, then where from.
+const explainOf = (hit: RecallHit, s: (typeof STRINGS)[Lang]) => {
+  const why = hit.why
+    ? [scoreOf(hit.why, s.via), hit.why.matched.length > 0 ? `${s.matched} ${hit.why.matched.join(' / ')}` : undefined]
+        .filter(Boolean)
+        .join(' · ')
+    : ''
+  const o = hit.origin ?? {}
+  const from = [
+    [o.agent, o.source, o.model ? `(${o.model})` : undefined].filter(Boolean).join(' ') || undefined,
+    o.writer ? `${s.key} ${o.writer}` : undefined,
+    o.host,
+    o.project ? `${s.project} ${o.project}` : undefined,
+    o.session ? `${s.session} ${o.session}` : undefined,
+    o.url,
+    o.date,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+  return [why ? `${s.why} ${why}` : '', from ? `${s.from} ${from}` : ''].filter(Boolean).join('  ')
 }
 
 // The shell capture's digestTranscript: what the person typed and what the
@@ -735,6 +990,8 @@ function parseJSON<T>(raw: string): T | undefined {
 
 const strings = (list: unknown, max: number) =>
   Array.isArray(list) ? list.filter((s): s is string => typeof s === 'string' && s.trim() !== '').slice(0, max) : []
+
+const oneLine = (text: string) => text.split(/\s+/).filter(Boolean).join(' ')
 
 const snippetOf = (content: string) => clip(content.split(/\s+/).filter(Boolean).join(' '), SNIPPET)
 

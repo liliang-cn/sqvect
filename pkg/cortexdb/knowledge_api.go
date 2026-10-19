@@ -32,6 +32,10 @@ func (db *DB) SaveKnowledge(ctx context.Context, req KnowledgeSaveRequest) (*Kno
 	}
 
 	metadata := cloneStringMap(req.Metadata)
+	if metadata == nil && writerOf(ctx) != "" {
+		metadata = map[string]string{}
+	}
+	stampWriter(ctx, metadata, plainString)
 	version := 1
 	if existing != nil {
 		version = existing.Version + 1
@@ -105,6 +109,10 @@ func (db *DB) UpdateKnowledge(ctx context.Context, req KnowledgeUpdateRequest) (
 	if req.Metadata != nil {
 		metadata = cloneStringMap(req.Metadata)
 	}
+	if metadata == nil && writerOf(ctx) != "" {
+		metadata = map[string]string{}
+	}
+	stampUpdater(ctx, metadata, existing.Metadata, plainString)
 
 	collection, err := db.knowledgeCollection(ctx, req.KnowledgeID)
 	if err != nil {

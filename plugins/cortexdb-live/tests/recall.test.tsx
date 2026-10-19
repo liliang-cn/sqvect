@@ -8,6 +8,47 @@ const recallPayload = {
   knowledge: [{ knowledge_id: 'k1', title: 'Indent policy', snippet: 'Tabs in Go.' }],
 }
 
+// A brain's answer as v2.134 gives it: each hit with the scores that found it
+// and the metadata its writer left.
+const explainedPayload = {
+  memory_decision: { effective_mode: 'auto' },
+  knowledge_decision: { effective_mode: 'hybrid' },
+  memories: [
+    {
+      score: 0.9312,
+      similarity: 0.8037,
+      via: ['semantic', 'keyword'],
+      memory: {
+        id: 'auto:d0b123ed:verify-fix',
+        content: 'linstor-server: the resize fix is verified by reverting it and watching the test go red.',
+        created_at: '2026-10-09T02:25:42Z',
+        metadata: {
+          date: '2026-10-09',
+          source: 'auto-capture',
+          model: 'haiku',
+          agent: 'claude-code',
+          host: 'mac',
+          project: 'linstor-server',
+          session: 'd0b123ed-e6d6-4b5e-82ad-570cd2238f5b',
+          written_by: 'legacy-token',
+        },
+      },
+    },
+  ],
+  knowledge: [
+    {
+      knowledge_id: 'noted:note:1',
+      title: 'Resize runbook',
+      snippet: 'Resize a volume, then verify.',
+      author: 'noted',
+      source_url: 'noted://note/1',
+      vector_score: 0.3026,
+      lexical_score: 0.7809,
+      metadata: { updated: '2026-10-18T09:00:28Z', written_by: 'hermes' },
+    },
+  ],
+}
+
 const PLAN = {
   skip: false,
   query: 'What indentation does Alice prefer?',
@@ -26,6 +67,9 @@ type World = {
   existing?: object
   retire?: object
   messages?: { role: 'user' | 'assistant'; text: string; toolUses: never[] }[]
+  root?: string
+  host?: string
+  payload?: object
   isBrainDown?: boolean
   isDenied?: boolean
   connectsAfter?: number
@@ -75,7 +119,7 @@ const world = (on: On, w: World): Seen => {
           ? { ok: true }
           : isCaptureLookup && w.existing
             ? w.existing
-            : recallPayload
+            : (w.payload ?? recallPayload)
     return { value: { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false } }
   })
   on('model.complete', ($, e) => {
@@ -89,8 +133,13 @@ const world = (on: On, w: World): Seen => {
   })
   on('session.messages', () => ({ value: (w.messages ?? []) as never }))
   on('session.id', () => ({ value: 'abcdef1234567890' }))
+  on('session.root', () => ({ value: w.root ?? '/home/a' }))
   on('config.list', () => ({ value: [] }))
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('process.run', ($, e) =>
+    e.argv[0] === 'hostname' && w.host
+      ? { value: { exitCode: 0, stdout: `${w.host}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+      : { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } },
+  )
   on('ui.status', ($, e) => {
     seen.status.push(String(e.text))
     return { value: undefined }
@@ -116,8 +165,8 @@ test('a haiku plan drives the recall, and its block replaces the shell one', asy
   expect(recall?.args.keywords).toContain('prefer')
   expect(out.additionalContext?.[0]).toBe('another plugin')
   const mine = out.additionalContext?.[1] ?? ''
-  expect(mine).toContain('- pref-tabs: Alice prefers tabs.')
-  expect(mine).toContain('- Indent policy: Tabs in Go.')
+  expect(mine).toContain('- pref-tabs [semantic]: Alice prefers tabs.')
+  expect(mine).toContain('- Indent policy [semantic]: Tabs in Go.')
   expect(mine).not.toContain('from the shell hook')
   expect(seen.status.at(-1)).toMatch(/^🧠 .* · recall \d+\.\ds$/)
 })
@@ -177,6 +226,72 @@ test('a brain that fails keeps the shell block', async ($, on) => {
   const out = await $.classic.UserPromptSubmit({ prompt: 'anything' })
 
   expect(out.additionalContext).toEqual([SHELL, 'another plugin'])
+})
+
+const linstor = [
+  { role: 'user' as const, text: 'linstor-server: resize leaves the volume definition at the old size', toolUses: [] as never[] },
+  { role: 'assistant' as const, text: 'Root cause: VolumeDefinition resize skips the satellite update. I suggest a fix in CtrlVlmDfnModifyApiCallHandler plus a regression test.', toolUses: [] as never[] },
+]
+
+test('a message that points into the conversation is planned with the conversation and the project', async ($, on) => {
+  const seen = world(on, { autorecall: 'on', messages: linstor, root: '/Users/a/Works/linstor-server' })
+
+  await $.classic.UserPromptSubmit({ prompt: '按建议 · 这个修复前后可以验证吗' })
+
+  const asked = seen.prompts.find(p => p.includes('New user message')) ?? ''
+  expect(asked).toContain('Project: linstor-server')
+  expect(asked).toContain('ASSISTANT: Root cause: VolumeDefinition resize skips the satellite update.')
+  expect(asked).toContain('USER: linstor-server: resize leaves')
+})
+
+test('without a plan the pointer message still carries the project and the last reply', async ($, on) => {
+  const seen = world(on, { autorecall: 'on', plan: 'fail', messages: linstor, root: '/Users/a/Works/linstor-server' })
+
+  await $.classic.UserPromptSubmit({ prompt: '按建议 · 这个修复前后可以验证吗' })
+
+  const recall = seen.calls.find(c => c.tool === 'knowledge_memory_recall')
+  const query = String(recall?.args.query)
+  expect(query.startsWith('按建议 · 这个修复前后可以验证吗\n\nProject: linstor-server\nContext: Root cause: VolumeDefinition')).toBe(true)
+  expect(recall?.args.keywords).toContain('linstor-server')
+  expect(recall?.args.entity_names).toEqual(['linstor-server'])
+})
+
+test('a fresh session with no project asks the message as written', async ($, on) => {
+  const seen = world(on, { autorecall: 'on', plan: 'fail' })
+
+  await $.classic.UserPromptSubmit({ prompt: '按建议 · 这个修复前后可以验证吗' })
+
+  expect(seen.calls.find(c => c.tool === 'knowledge_memory_recall')?.args.query).toBe('按建议 · 这个修复前后可以验证吗')
+})
+
+test('each hit says why it came back, who wrote it and where from', async ($, on) => {
+  const seen = world(on, { autorecall: 'on', payload: explainedPayload, plan: { ...PLAN, keywords: ['linstor-server', 'verify', 'resize'] } })
+
+  const out = await $.classic.UserPromptSubmit({ prompt: 'how do we verify the resize fix?' })
+
+  const mine = out.additionalContext?.[1] ?? ''
+  expect(mine).toContain(
+    '- auto:d0b123ed:verify-fix [2026-10-09 · claude-code auto-capture (haiku) · host mac · project linstor-server · session d0b123ed · semantic 0.80 + keyword]: linstor-server: the resize fix',
+  )
+  expect(mine).toContain('- Resize runbook [2026-10-18 · noted · key hermes · noted://note/1 · semantic 0.30 + keyword 0.78]: Resize a volume')
+  // The shared token every unkeyed client speaks with names nobody.
+  expect(mine).not.toContain('legacy-token')
+  expect(seen.calls.length).toBeGreaterThan(0)
+})
+
+test('the band explains each hit in Chinese', { options: { language: 'zh' } }, async ($, on) => {
+  world(on, { autorecall: 'on', payload: explainedPayload, plan: { ...PLAN, keywords: ['linstor-server', 'verify', 'resize'] } })
+  await $.session.start({ cwd: '/w', surface: 'terminal' } as never)
+  await $.classic.UserPromptSubmit({ prompt: 'how do we verify the resize fix?' })
+
+  const band = await $.ui.mount({ plugin: 'cortexdb-live', surface: 'terminal', component: 'AbovePrompt', props })
+  await band.press({ key: 'toggle' })
+  expect(await band.find({ text: /What indentation does Alice prefer\?/ }), 'resolved query').toBeDefined()
+  expect(
+    await band.find({ text: /依据 语义 0\.80 \+ 关键词 · 命中 linstor-server \/ resize  来源 claude-code auto-capture \(haiku\) · mac · 项目 linstor-server · 会话 d0b123ed · 2026-10-09/ }),
+    'memory explained',
+  ).toBeDefined()
+  expect(await band.find({ text: /依据 语义 0\.30 \+ 关键词 0\.78 · 命中 verify \/ resize  来源 noted · key hermes · noted:\/\/note\/1 · 2026-10-18/ }), 'knowledge explained').toBeDefined()
 })
 
 const props = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 80 } as never
@@ -246,7 +361,7 @@ test('an idle session is captured once, with stable ids, and not again', async (
 
   const saves = seen.calls.filter(c => c.tool === 'memory_save')
   expect(saves.map(s => s.args.memory_id)).toEqual(['auto:abcdef12:cortexdb-2120-2-deployed'])
-  expect(saves[0]?.args.metadata).toMatchObject({ source: 'auto-capture', session: 'abcdef1234567890', model: 'haiku' })
+  expect(saves[0]?.args.metadata).toMatchObject({ source: 'auto-capture', agent: 'claude-code', session: 'abcdef1234567890', model: 'haiku' })
   const digest = seen.prompts.at(-1) ?? ''
   expect(digest).toContain('USER: Also bump the docs')
   expect(digest).not.toContain('noise')
@@ -256,6 +371,22 @@ test('an idle session is captured once, with stable ids, and not again', async (
   await $.turn.complete(turnDone)
   await clock.advance(91 * 1000)
   expect(seen.calls.filter(c => c.tool === 'memory_save').length).toBe(1)
+})
+
+test('a captured memory names the project and the machine it came from', async ($, on) => {
+  const seen = world(on, {
+    messages: conversation,
+    root: '/Users/a/Works/linstor-server',
+    host: 'mac',
+    captured: { memories: [{ slug: 'resize-fix', content: 'linstor-server resize fix verified on 2026-10-19.' }] },
+  })
+  await $.session.start({ cwd: '/Users/a/Works/linstor-server', surface: 'terminal' } as never)
+
+  await $.turn.complete(turnDone)
+  await seen.clock.advance(91 * 1000)
+
+  const save = seen.calls.find(c => c.tool === 'memory_save')
+  expect(save?.args.metadata).toMatchObject({ project: 'linstor-server', host: 'mac', agent: 'claude-code' })
 })
 
 test('a capture retires the older memory it made untrue, never a later one', async ($, on) => {

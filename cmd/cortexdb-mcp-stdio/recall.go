@@ -13,7 +13,9 @@ import (
 
 // hookInput is the subset of the UserPromptSubmit hook payload we read from stdin.
 type hookInput struct {
-	Prompt string `json:"prompt"`
+	Prompt         string `json:"prompt"`
+	Cwd            string `json:"cwd"`
+	TranscriptPath string `json:"transcript_path"`
 }
 
 type hookSpecificOutput struct {
@@ -43,13 +45,14 @@ func runRecall() {
 	}
 
 	topK := envInt("CORTEXDB_RECALL_TOPK", 3)
+	situation := situationFor(in)
 
 	// Shared-brain mode: answer from the one central database, not this
 	// machine's local file. Without this branch --recall returns from main
 	// before the CORTEXDB_REMOTE check ever runs, and a machine on a shared
 	// brain keeps injecting memories from a file nothing writes to any more.
 	if remote := strings.TrimSpace(os.Getenv("CORTEXDB_REMOTE")); remote != "" {
-		emitRecall(runRecallRemote(remote, os.Getenv("CORTEXDB_GRPC_TOKEN"), prompt, topK))
+		emitRecall(runRecallRemote(remote, os.Getenv("CORTEXDB_GRPC_TOKEN"), prompt, situation, topK))
 		return
 	}
 
@@ -73,8 +76,9 @@ func runRecall() {
 	// knowledge alone. A local brain that only surfaced knowledge documents hid
 	// every memory_save behind a tool call the agent had to think to make.
 	resp, err := db.KnowledgeMemory().Recall(context.Background(), cortexdb.KnowledgeMemoryRecallRequest{
-		Query:         prompt,
-		Keywords:      keywordsFromPrompt(prompt),
+		Query:         situation.query(prompt),
+		Keywords:      situation.keywords(prompt),
+		EntityNames:   situation.entities(),
 		RetrievalMode: cortexdb.RetrievalModeAuto,
 		GraphLight:    true,
 		TopKMemories:  topK,
@@ -84,20 +88,7 @@ func runRecall() {
 		return
 	}
 
-	hits := make([]recallHit, 0, len(resp.Memories)+len(resp.Knowledge))
-	for _, hit := range resp.Memories {
-		hits = append(hits, recallHit{
-			KnowledgeID: hit.Memory.ID,
-			Snippet:     snippetOf(hit.Memory.Content),
-		})
-	}
-	for _, hit := range resp.Knowledge {
-		hits = append(hits, recallHit{
-			KnowledgeID: hit.KnowledgeID,
-			Title:       hit.Title,
-			Snippet:     hit.Snippet,
-		})
-	}
+	hits := hitsFromRecall(resp)
 	emitRecall(formatRecallHits(hits))
 }
 

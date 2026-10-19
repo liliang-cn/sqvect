@@ -257,6 +257,15 @@ type MemorySearchRequest struct {
 type MemorySearchHit struct {
 	Memory MemoryRecord `json:"memory"`
 	Score  float64      `json:"score"`
+	// Similarity is the query's raw vector similarity to the memory, before
+	// the importance and recency boosts that make Score; zero when keyword
+	// search found the hit. Score orders the list, Similarity is the number
+	// that says how close the memory actually is.
+	Similarity float64 `json:"similarity,omitempty"`
+	// Via names the retrievers that found the memory: "semantic", "keyword",
+	// "graph". A recall that fused several says which one each hit owes its
+	// place to, so a person can tell a close meaning from a shared word.
+	Via []string `json:"via,omitempty"`
 }
 
 // MemorySearchResponse contains retrieved memories.

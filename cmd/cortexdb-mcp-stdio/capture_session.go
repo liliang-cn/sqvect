@@ -32,6 +32,7 @@ import (
 func runCaptureSession(args []string) {
 	transcriptPath := ""
 	sessionID := ""
+	cwd := ""
 	dryRun := false
 	for _, a := range args {
 		switch {
@@ -45,12 +46,14 @@ func runCaptureSession(args []string) {
 		var payload struct {
 			SessionID      string `json:"session_id"`
 			TranscriptPath string `json:"transcript_path"`
+			Cwd            string `json:"cwd"`
 		}
 		if err := json.NewDecoder(os.Stdin).Decode(&payload); err != nil {
 			return // no payload, nothing to do — a hook must never fail the session
 		}
 		transcriptPath = payload.TranscriptPath
 		sessionID = payload.SessionID
+		cwd = payload.Cwd
 	}
 	if transcriptPath == "" {
 		return
@@ -123,7 +126,10 @@ func runCaptureSession(args []string) {
 		}
 		if t.Kind != "claude" {
 			req.Metadata["agent"] = t.Kind
+		} else {
+			req.Metadata["agent"] = "claude-code"
 		}
+		stampCaptureOrigin(req.Metadata, cwd)
 		if !plan.apply(f.Slug, &req) {
 			fmt.Printf("outdated %s (contradicted by %s): %s\n", req.MemoryID, plan.Outdated[f.Slug], clip(req.Content, 120))
 			continue
@@ -152,6 +158,18 @@ func runCaptureSession(args []string) {
 	}
 	if !dryRun {
 		fmt.Printf("capture: %d memories from %d user turns, %d older ones retired\n", saved, userTurns, retired)
+	}
+}
+
+// stampCaptureOrigin records the machine and the project a captured memory
+// came from, so a recall can show it. The cortexdb-live mod records the same
+// keys.
+func stampCaptureOrigin(meta map[string]any, cwd string) {
+	if host, err := os.Hostname(); err == nil && host != "" {
+		meta["host"], _, _ = strings.Cut(host, ".")
+	}
+	if project := situationFor(hookInput{Cwd: cwd}).Project; project != "" {
+		meta["project"] = project
 	}
 }
 

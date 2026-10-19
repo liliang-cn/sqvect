@@ -69,7 +69,9 @@ func authInterceptor(keys *authz.KeySet, db *cortexdb.DB) grpc.UnaryServerInterc
 		if err := authorizeRequestRows(key, info.FullMethod, req); err != nil {
 			return nil, status.Error(codes.PermissionDenied, err.Error())
 		}
-		return handler(withCallerKey(ctx, key), req)
+		// The key also signs what this call writes: a save records it as
+		// written_by, which a recall shows next to each hit.
+		return handler(withCallerKey(cortexdb.WithWriter(ctx, key.ID), key), req)
 	}
 }
 
