@@ -35,8 +35,13 @@ type AggregationRequest struct {
 	// so it is set by the facade and never read from a request's JSON.
 	ExcludeDocuments     string        `json:"-"`
 	ExcludeDocumentsArgs []interface{} `json:"-"`
-	OrderBy              string        `json:"order_by"` // Field to order results by
-	Limit                int           `json:"limit"`    // Max results
+	// OnlyDocuments keeps only the rows of the documents this condition on
+	// the documents table selects, with one ? per OnlyDocumentsArgs; rows
+	// that belong to no document are left out. Set by the facade only.
+	OnlyDocuments     string        `json:"-"`
+	OnlyDocumentsArgs []interface{} `json:"-"`
+	OrderBy           string        `json:"order_by"` // Field to order results by
+	Limit             int           `json:"limit"`    // Max results
 }
 
 // AggregationResult represents a single aggregation result
@@ -505,7 +510,8 @@ func validateAggregationRequest(req AggregationRequest) error {
 // exclusion to a query on embeddings.
 func addAggregateFilters(query string, args []interface{}, req AggregationRequest) (string, []interface{}) {
 	query, args = addMetadataFilters(query, args, req.Filters)
-	return excludeDocuments(query, args, req.ExcludeDocuments, req.ExcludeDocumentsArgs)
+	query, args = excludeDocuments(query, args, req.ExcludeDocuments, req.ExcludeDocumentsArgs)
+	return onlyDocuments(query, args, req.OnlyDocuments, req.OnlyDocumentsArgs)
 }
 
 // excludeDocuments adds "the row belongs to none of the documents where
@@ -517,6 +523,16 @@ func excludeDocuments(query string, args []interface{}, where string, whereArgs 
 		return query, args
 	}
 	query += " AND (doc_id IS NULL OR doc_id NOT IN (SELECT id FROM documents WHERE " + where + "))"
+	return query, append(args, whereArgs...)
+}
+
+// onlyDocuments adds "the row belongs to one of the documents where this
+// condition holds" to a query on embeddings.
+func onlyDocuments(query string, args []interface{}, where string, whereArgs []interface{}) (string, []interface{}) {
+	if where == "" {
+		return query, args
+	}
+	query += " AND doc_id IN (SELECT id FROM documents WHERE " + where + ")"
 	return query, append(args, whereArgs...)
 }
 

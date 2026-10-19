@@ -171,9 +171,16 @@ func (t *GraphRAGToolbox) ExtractConversation(ctx context.Context, req ToolExtra
 }
 
 // loadSessionText concatenates a session's messages as "role: content" lines.
+// Under the review gate it leaves out the memories the gate hides: a summary
+// made of them, persisted, would serve their text as knowledge.
 func (t *GraphRAGToolbox) loadSessionText(ctx context.Context, sessionID string) (string, error) {
+	gate := ""
+	if t.db.reviewGate {
+		status := t.db.Dialect().JSONTextGuarded("metadata", reviewStatusKey)
+		gate = ` AND (` + status + ` IS NULL OR ` + status + ` NOT IN ('` + ReviewProposed + `', '` + ReviewRejected + `'))`
+	}
 	rows, err := t.db.query(ctx,
-		`SELECT COALESCE(role,''), COALESCE(content,'') FROM messages WHERE session_id = ? ORDER BY created_at`, sessionID)
+		`SELECT COALESCE(role,''), COALESCE(content,'') FROM messages WHERE session_id = ?`+gate+` ORDER BY created_at`, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("extract_conversation: load session: %w", err)
 	}

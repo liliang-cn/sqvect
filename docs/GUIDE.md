@@ -451,6 +451,38 @@ again just before its delete, so a row renewed after the listing is kept. With
 `CORTEXDB_REMOTE` set, the command sweeps the shared brain through the tool.
 `sweep_expired` is a write tool: any read-write key can run it.
 
+### Review status and the review gate
+
+`ingest_document`, `knowledge_save`, `knowledge_update`, `memory_save` and
+`memory_update` (and `knowledge_memory_remember`, which takes the request of
+`memory_save`) take `review_status` (`proposed`, `accepted` or `rejected`),
+with `reviewed_by` and `reviewed_at` on an acceptance or a rejection. When the
+server runs with keys, the reviewer is the calling key, and a `reviewed_by` that
+names someone else is refused; a proposal takes neither field. A write that
+does not decide keeps the stored decision. The engine keeps it under its own
+keys, `_review_status`, `_reviewed_by` and `_reviewed_at`, on the record only; a
+metadata key named `review_status` is yours and is never read.
+
+With `CORTEXDB_REVIEW_GATE=1` on the server (or on `cortexdb-mcp-stdio`), a
+proposed or rejected document or memory is left out of every search and recall,
+every chunk tool, the aggregates and the graph walks from a node
+(`knowledge_memory_neighbors`, `knowledge_memory_expand_entity_context`,
+`expand_graph`, `get_nodes`, `search_paths`, `knowledge_memory_shortest_path`).
+The tools that read the stored graph as it is (`find_nodes`,
+`disambiguate_mentions`, `predict_graph_edges`, `rank_graph_nodes`,
+`graph_list_all`, `graph_cypher_query`) still serve it, as they serve an expired
+row until the sweep. Without the gate, the decision is stored and nothing is
+hidden. The gate is a curation filter, not access
+control: `knowledge_get` and `memory_get` still read a hidden row by id, any
+writer can save `accepted`, and `plan.filters.review_status` lists the documents
+of a status to any reader (memories ignore that filter). A curator lists what
+waits with `aggregate_metadata` filtered on `_review_status`, which reads the
+decision on the record. A filter on `accepted` takes the documents with no
+status too, in a plan and on the aggregates. Under the gate, a proposed or
+rejected memory is not promoted to knowledge, and a conversation summary leaves
+it out. The other writes the engine makes by itself (consolidation, conversation
+extraction, imports) carry no status.
+
 ## Claude Code and Codex plugin
 
 Give Claude Code (and Codex) durable memory + a knowledge graph as a plugin. It bundles the `cortexdb` skill plus a live MCP server, runs in no-embedder **lexical mode** by default (no API key, no Go toolchain — the server binary is fetched from the matching release), and stores everything in one **global** SQLite file shared by every project.

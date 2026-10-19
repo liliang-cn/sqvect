@@ -219,7 +219,7 @@ func TestTheGraphWalkLeavesAnExpiredPassageOut(t *testing.T) {
 // brain; the sweep, which is the guarantee, reports the failure instead.
 func TestAnUnreadableBrainIsNotAnEmptyBrain(t *testing.T) {
 	db, _, c := openIngestBrain(t, "expiry-unreadable")
-	if hidden := db.hiddenAmong(c, []string{""}); len(hidden) != 0 {
+	if hidden := db.hiddenAmong(c, nil, []string{""}); len(hidden) != 0 {
 		t.Fatal("a chunk without a document was treated as expired")
 	}
 	if err := db.Close(); err != nil {

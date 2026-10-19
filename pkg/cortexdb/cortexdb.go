@@ -61,6 +61,9 @@ type DB struct {
 	// memoryFloor is the cosine below which a semantic memory hit is dropped;
 	// see WithMemorySemanticFloor.
 	memoryFloor float64
+	// reviewGate, when set, leaves proposed and rejected rows out of search
+	// and recall; see WithReviewGate in review.go.
+	reviewGate bool
 	// memorySearches shares one run among identical concurrent memory
 	// searches; see memory_search_coalesce.go.
 	memorySearches memorySearchFlights

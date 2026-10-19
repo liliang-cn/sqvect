@@ -767,7 +767,7 @@ func (db *DB) chunksInScope(ctx context.Context, ids []string, collection string
 	for _, chunk := range out {
 		docIDs = append(docIDs, chunk.DocumentID)
 	}
-	hidden := db.hiddenAmong(ctx, docIDs)
+	hidden := db.hiddenAmong(ctx, filters, docIDs)
 	for id, chunk := range out {
 		if !allowDocument(filters, hidden, chunk.DocumentID) {
 			delete(out, id)
@@ -834,7 +834,7 @@ func (db *DB) searchMemoryPPR(ctx context.Context, req MemorySearchRequest, reso
 			if err != nil {
 				continue // a node can outlive its memory
 			}
-			if row.record.SessionID != bucketID || memoryExpired(row.record) || memorySuperseded(row.record) {
+			if row.record.SessionID != bucketID || memoryExpired(row.record) || memorySuperseded(row.record) || db.memoryUnreviewed(row.record) {
 				continue
 			}
 			e = &entry{

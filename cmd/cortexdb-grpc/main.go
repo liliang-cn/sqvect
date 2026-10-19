@@ -115,6 +115,10 @@ func main() {
 		opts = append(opts, cortexdb.WithMemorySemanticFloor(floor))
 		log.Printf("memory semantic floor: %.3f", floor)
 	}
+	opts, err := appendReviewGate(opts)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	db, err := cortexdb.Open(cortexdb.DefaultConfig(*dbPath), opts...)
 	if err != nil {

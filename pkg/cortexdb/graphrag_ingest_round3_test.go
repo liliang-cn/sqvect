@@ -188,11 +188,11 @@ func TestARetiredChunkIsRecordedAsAReingest(t *testing.T) {
 }
 
 // EngineDocumentKeys names every key the engine writes on a document record
-// from its content, its chunking and its fields (the expiry here), so a port that hands them
+// from its content, its chunking and its fields (the expiry and a review decision here), so a port that hands them
 // to the facade hands all of them and no more.
 func TestEngineDocumentKeysNameEveryKeyTheEngineWrites(t *testing.T) {
 	db, tools, ctx := openIngestBrain(t, "engine-keys")
-	if _, err := tools.IngestDocument(ctx, ToolIngestDocumentRequest{DocumentID: "d1", Content: threeChunks, Metadata: map[string]string{"team": "a"}, ExpiresAt: strPtr("2031-10-18T00:00:00Z")}); err != nil {
+	if _, err := tools.IngestDocument(ctx, ToolIngestDocumentRequest{DocumentID: "d1", Content: threeChunks, Metadata: map[string]string{"team": "a"}, ExpiresAt: strPtr("2031-10-18T00:00:00Z"), ReviewStatus: ReviewAccepted, ReviewedBy: "curator"}); err != nil {
 		t.Fatal(err)
 	}
 	doc, err := db.store.GetDocument(ctx, "d1")
@@ -209,5 +209,32 @@ func TestEngineDocumentKeysNameEveryKeyTheEngineWrites(t *testing.T) {
 	want := slices.Sorted(slices.Values(EngineDocumentKeys()))
 	if !slices.Equal(written, want) {
 		t.Fatalf("the engine wrote %v, EngineDocumentKeys names %v", written, want)
+	}
+}
+
+// EngineMemoryKeys names every key the engine writes on a memory's metadata.
+func TestEngineMemoryKeysNameEveryKeyTheEngineWrites(t *testing.T) {
+	db, _, ctx := openIngestBrain(t, "memory-keys")
+	if _, err := db.SaveMemory(ctx, MemorySaveRequest{MemoryID: "m1", UserID: "u", Scope: "user", Content: "The osprey job runs at dawn.", Metadata: map[string]any{"team": "a"}, ReviewStatus: ReviewAccepted, ReviewedBy: "curator"}); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := db.SQL().QueryRow(`SELECT metadata FROM messages WHERE id = 'm1'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal([]byte(raw), &meta); err != nil {
+		t.Fatal(err)
+	}
+	var written []string
+	for k := range meta {
+		if strings.HasPrefix(k, "_") {
+			written = append(written, k)
+		}
+	}
+	slices.Sort(written)
+	want := slices.Sorted(slices.Values(EngineMemoryKeys()))
+	if !slices.Equal(written, want) {
+		t.Fatalf("the engine wrote %v on the memory, EngineMemoryKeys names %v", written, want)
 	}
 }

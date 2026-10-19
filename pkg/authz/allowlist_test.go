@@ -505,7 +505,8 @@ func TestMemoryGetTakesOneFormFromAConfinedKey(t *testing.T) {
 // A filter reads; it does not write. So a filter map (filters.*, filter.*)
 // may name an engine key: a curator lists what waits with
 // aggregate_metadata on _review_status, and the gate reads _expires_at. A
-// metadata map still takes no engine key from a confined key.
+// metadata map still takes no engine key the facade does not rewrite, such
+// as importflow's _table, from a confined key.
 func TestAFilterMayNameAnEngineKey(t *testing.T) {
 	notes := Key{ID: "notes", Scope: Scope{Collection: "notes"}}
 	for _, c := range []struct{ tool, args string }{
@@ -517,8 +518,8 @@ func TestAFilterMayNameAnEngineKey(t *testing.T) {
 			t.Errorf("%s: a filter on an engine key was refused: %v", c.tool, err)
 		}
 	}
-	err := notes.AuthorizeToolArgs("knowledge_save", []byte(`{"knowledge_id":"n1","collection":"notes","content":"x","metadata":{"_review_status":"accepted"}}`))
-	if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "metadata._review_status") {
+	err := notes.AuthorizeToolArgs("knowledge_save", []byte(`{"knowledge_id":"n1","collection":"notes","content":"x","metadata":{"_table":"t"}}`))
+	if !errors.Is(err, ErrDenied) || !strings.Contains(err.Error(), "metadata._table") {
 		t.Errorf("an engine key in metadata was not refused: %v", err)
 	}
 }
@@ -567,10 +568,19 @@ func TestTheRewrittenMarksPassOnTheDocumentWritesOnly(t *testing.T) {
 	if err := hermes.AuthorizeToolArgs("memory_save", hermes.ConfineToolArgs("memory_save", []byte(`{"user_id":"hermes","content":"c","metadata":{"team":"x"}}`))); err != nil {
 		t.Fatalf("memory_save refused plain metadata, so its refusal below proves nothing: %v", err)
 	}
-	for _, mark := range cortexdb.EngineDocumentKeys() {
-		args := `{"user_id":"hermes","content":"c","metadata":{"` + mark + `":"x"}}`
-		if err := hermes.AuthorizeToolArgs("memory_save", hermes.ConfineToolArgs("memory_save", []byte(args))); !errors.Is(err, ErrDenied) {
-			t.Errorf("memory_save took the mark %s: %v", mark, err)
+	// A memory write takes back the review keys, which the facade rewrites
+	// on a memory too, and none of a document's other marks.
+	for _, tool := range []string{"memory_save", "knowledge_memory_remember"} {
+		for _, mark := range cortexdb.EngineDocumentKeys() {
+			args := `{"user_id":"hermes","content":"c","metadata":{"` + mark + `":"x"}}`
+			err := hermes.AuthorizeToolArgs(tool, hermes.ConfineToolArgs(tool, []byte(args)))
+			if slices.Contains(cortexdb.EngineMemoryKeys(), mark) {
+				if err != nil {
+					t.Errorf("%s refused the review key %s: %v", tool, mark, err)
+				}
+			} else if !errors.Is(err, ErrDenied) {
+				t.Errorf("%s took the mark %s: %v", tool, mark, err)
+			}
 		}
 	}
 }

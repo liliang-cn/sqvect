@@ -46,6 +46,17 @@ type KnowledgeSaveRequest struct {
 	// every search and removed by the sweep. Empty removes the expiry;
 	// absent keeps the one stored, as knowledge_update does.
 	ExpiresAt *string `json:"expires_at,omitempty"`
+	// ReviewStatus, ReviewedBy and ReviewedAt decide the review: proposed,
+	// accepted or rejected, who decided (the calling key when there is one),
+	// and when (now when left out). Left out, the stored decision is kept,
+	// whatever the write does with metadata: a decision is never cleared.
+	ReviewStatus string `json:"review_status,omitempty"`
+	ReviewedBy   string `json:"reviewed_by,omitempty"`
+	ReviewedAt   string `json:"reviewed_at,omitempty"`
+}
+
+func (r KnowledgeSaveRequest) review() reviewFields {
+	return reviewFields{Status: r.ReviewStatus, By: r.ReviewedBy, At: r.ReviewedAt}
 }
 
 // KnowledgeSaveResponse summarizes a knowledge write.
@@ -72,6 +83,17 @@ type KnowledgeUpdateRequest struct {
 	// ExpiresAt sets the expiry, removes it when empty, and keeps the stored
 	// one when absent, whatever the update does with metadata.
 	ExpiresAt *string `json:"expires_at,omitempty"`
+	// ReviewStatus, ReviewedBy and ReviewedAt decide the review: proposed,
+	// accepted or rejected, who decided (the calling key when there is one),
+	// and when (now when left out). Left out, the stored decision is kept,
+	// whatever the write does with metadata: a decision is never cleared.
+	ReviewStatus string `json:"review_status,omitempty"`
+	ReviewedBy   string `json:"reviewed_by,omitempty"`
+	ReviewedAt   string `json:"reviewed_at,omitempty"`
+}
+
+func (r KnowledgeUpdateRequest) review() reviewFields {
+	return reviewFields{Status: r.ReviewStatus, By: r.ReviewedBy, At: r.ReviewedAt}
 }
 
 // KnowledgeGetRequest fetches a knowledge item by ID.
@@ -168,7 +190,13 @@ type MemoryRecord struct {
 	Importance float64        `json:"importance,omitempty"`
 	TTLSeconds int            `json:"ttl_seconds,omitempty"`
 	ExpiresAt  *time.Time     `json:"expires_at,omitempty"`
-	CreatedAt  time.Time      `json:"created_at,omitempty"`
+	// ReviewStatus and ReviewedBy mirror the metadata keys _review_status
+	// and _reviewed_by (see review.go). Under the review gate, a proposed or
+	// rejected memory is left out of search, recall and the graph walks from
+	// a node.
+	ReviewStatus string    `json:"review_status,omitempty"`
+	ReviewedBy   string    `json:"reviewed_by,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
 }
 
 // MemorySaveRequest stores a memory in a dedicated memory bucket.
@@ -194,6 +222,17 @@ type MemorySaveRequest struct {
 	// is what made agent-written memories arrive with no graph presence.
 	Entities  []ToolEntityInput   `json:"entities,omitempty"`
 	Relations []ToolRelationInput `json:"relations,omitempty"`
+	// ReviewStatus, ReviewedBy and ReviewedAt decide the review: proposed,
+	// accepted or rejected, who decided (the calling key when there is one),
+	// and when (now when left out). Left out, the stored decision is kept,
+	// whatever the write does with metadata: a decision is never cleared.
+	ReviewStatus string `json:"review_status,omitempty"`
+	ReviewedBy   string `json:"reviewed_by,omitempty"`
+	ReviewedAt   string `json:"reviewed_at,omitempty"`
+}
+
+func (r MemorySaveRequest) review() reviewFields {
+	return reviewFields{Status: r.ReviewStatus, By: r.ReviewedBy, At: r.ReviewedAt}
 }
 
 // MemorySaveResponse returns the stored memory.
@@ -208,6 +247,17 @@ type MemoryUpdateRequest struct {
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	Importance *float64       `json:"importance,omitempty"`
 	TTLSeconds *int           `json:"ttl_seconds,omitempty"`
+	// ReviewStatus, ReviewedBy and ReviewedAt decide the review: proposed,
+	// accepted or rejected, who decided (the calling key when there is one),
+	// and when (now when left out). Left out, the stored decision is kept,
+	// whatever the write does with metadata: a decision is never cleared.
+	ReviewStatus string `json:"review_status,omitempty"`
+	ReviewedBy   string `json:"reviewed_by,omitempty"`
+	ReviewedAt   string `json:"reviewed_at,omitempty"`
+}
+
+func (r MemoryUpdateRequest) review() reviewFields {
+	return reviewFields{Status: r.ReviewStatus, By: r.ReviewedBy, At: r.ReviewedAt}
 }
 
 // MemoryGetRequest fetches a memory by ID.

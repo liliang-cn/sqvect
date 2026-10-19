@@ -59,6 +59,7 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 		// Each phrasing below is a variant of one question; the CJK bigram
 		// path runs once on the question itself, after the loop.
 		skipCJKBigrams: true,
+		reviewStatus:   reviewStatusOf(resolution.Plan.Filters),
 	}
 
 	queries := lexicalSearchQueries(resolution.Plan.Query, resolution.Plan.Keywords, resolution.Plan.AlternateQueries)
@@ -249,9 +250,10 @@ func (t *GraphRAGToolbox) ExpandGraph(ctx context.Context, req ToolExpandGraphRe
 }
 
 // withoutExpiredDocuments drops from a subgraph the document and chunk nodes
-// of an expired document, the edges that touch them and their scores: the
-// graph is the one place a search could otherwise still reach an expired
-// passage, through the entities it mentions.
+// of an expired document, the memory nodes the review gate hides, the edges
+// that touch them and their scores: the graph is the one place a search
+// could otherwise still reach a hidden passage, through the entities it
+// mentions.
 func (db *DB) withoutExpiredDocuments(ctx context.Context, nodes []*graph.GraphNode, edges []*graph.GraphEdge, scores map[string]float64) ([]*graph.GraphNode, []*graph.GraphEdge) {
 	docIDs := make([]string, 0, len(nodes))
 	for _, node := range nodes {
@@ -259,11 +261,15 @@ func (db *DB) withoutExpiredDocuments(ctx context.Context, nodes []*graph.GraphN
 			docIDs = append(docIDs, docID)
 		}
 	}
-	hidden := db.hiddenAmong(ctx, docIDs)
-	dropped := map[string]struct{}{}
+	hidden := db.hiddenAmong(ctx, nil, docIDs)
+	dropped := db.hiddenMemoryNodes(ctx, nodes)
 	keptNodes := make([]*graph.GraphNode, 0, len(nodes))
 	for _, node := range nodes {
 		docID, _ := node.Properties["document_id"].(string)
+		if _, gone := dropped[node.ID]; gone {
+			delete(scores, node.ID)
+			continue
+		}
 		if (node.NodeType == "chunk" || node.NodeType == "document") && !allowDocument(nil, hidden, docID) {
 			dropped[node.ID] = struct{}{}
 			delete(scores, node.ID)
@@ -287,14 +293,35 @@ func (db *DB) withoutExpiredDocuments(ctx context.Context, nodes []*graph.GraphN
 	return keptNodes, db.withoutExpiredProvenance(ctx, keptEdges)
 }
 
+// hiddenMemoryNodes is the set of memory nodes the review gate leaves out of
+// a walk, read one memory at a time: a walk meets few. A memory that cannot
+// be read is hidden, as a document is, so an outage does not lift the gate.
+func (db *DB) hiddenMemoryNodes(ctx context.Context, nodes []*graph.GraphNode) map[string]struct{} {
+	hidden := map[string]struct{}{}
+	if !db.reviewGate {
+		return hidden
+	}
+	for _, node := range nodes {
+		memoryID, ok := memoryIDFromGraphNode(node.ID)
+		if !ok {
+			continue
+		}
+		if row, err := db.loadMemoryRow(ctx, memoryID); err == nil && !reviewHides(row.record.ReviewStatus) {
+			continue
+		}
+		hidden[node.ID] = struct{}{}
+	}
+	return hidden
+}
+
 // withoutExpiredProvenance takes out of each edge's provenance (chunk_ids,
 // source_chunk_id, document_id) the chunks and the document of an expired
-// document, so an edge does not name what the search hides. An edge that a
-// live document also backs, or that names no provenance, stays: a fact
-// between two entities has no expiry of its own. An edge that only expired
-// documents back is left out, since its id can name the document
-// (upsert_relations with a document_id). An edge it changes is a copy: the
-// graph's own edges are left as they are.
+// document, or of one the review gate hides, so an edge does not name what
+// the search hides. An edge that a live document also backs, or that names
+// no provenance, stays: a fact between two entities has no expiry of its
+// own. An edge that only hidden documents back is left out, since its id
+// can name the document (upsert_relations with a document_id). An edge it
+// changes is a copy: the graph's own edges are left as they are.
 func (db *DB) withoutExpiredProvenance(ctx context.Context, edges []*graph.GraphEdge) []*graph.GraphEdge {
 	var chunkIDs, docIDs []string
 	for _, edge := range edges {
@@ -313,10 +340,17 @@ func (db *DB) withoutExpiredProvenance(ctx context.Context, edges []*graph.Graph
 		return edges
 	}
 	docOf := map[string]string{}
+	// A chunk whose node cannot be read is shown under the expiry alone,
+	// which is advisory, and hidden under the review gate, which fails
+	// closed, as hiddenAmong does.
+	unreadable := false
 	if len(chunkIDs) > 0 {
 		chunks, err := db.graph.GetNodesBatch(ctx, chunkIDs)
 		if err != nil {
-			return edges
+			if !db.reviewGate {
+				return edges
+			}
+			unreadable = true
 		}
 		for _, chunk := range chunks {
 			doc, _ := chunk.Properties["document_id"].(string)
@@ -324,13 +358,13 @@ func (db *DB) withoutExpiredProvenance(ctx context.Context, edges []*graph.Graph
 			docIDs = append(docIDs, doc)
 		}
 	}
-	hidden := db.hiddenAmong(ctx, docIDs)
-	if len(hidden) == 0 {
+	hidden := db.hiddenAmong(ctx, nil, docIDs)
+	if len(hidden) == 0 && !unreadable {
 		return edges
 	}
 	hiddenChunk := func(id string) bool {
 		_, gone := hidden[docOf[id]]
-		return gone
+		return gone || unreadable
 	}
 	out := make([]*graph.GraphEdge, 0, len(edges))
 	for _, edge := range edges {

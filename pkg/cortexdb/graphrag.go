@@ -515,10 +515,11 @@ func (db *DB) searchGraphRAG(ctx context.Context, query string, opts GraphRAGQue
 		return nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
 	}
 
-	// The gate refills only the places expired rows took; the plan's
-	// filters then keep what they keep of those seeds, as on main, so a pin
-	// to a few documents does not read past top_k to find them.
-	seeds, err := db.gatedSearch(ctx, opts.TopK, func(k int) ([]core.ScoredEmbedding, error) {
+	// The gate refills only the places expired rows took, and the rows of
+	// another status than the plan asks for; the plan's other filters then
+	// keep what they keep of those seeds, as on main, so a pin to a few
+	// documents does not read past top_k to find them.
+	seeds, err := db.gatedSearchFor(ctx, opts.TopK, reviewStatusOf(resolution.Plan.Filters), func(k int) ([]core.ScoredEmbedding, error) {
 		return db.store.Search(ctx, queryVector, core.SearchOptions{Collection: opts.Collection, TopK: k, QueryText: query})
 	})
 	if err != nil {

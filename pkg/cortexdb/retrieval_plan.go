@@ -198,6 +198,7 @@ func mergeRetrievalFilters(base, override *RetrievalFilters) *RetrievalFilters {
 		merged.SessionID = strings.TrimSpace(base.SessionID)
 		merged.Scope = strings.TrimSpace(base.Scope)
 		merged.Namespace = strings.TrimSpace(base.Namespace)
+		merged.ReviewStatus = strings.TrimSpace(base.ReviewStatus)
 	}
 	if override != nil {
 		if value := strings.TrimSpace(override.Collection); value != "" {
@@ -216,6 +217,9 @@ func mergeRetrievalFilters(base, override *RetrievalFilters) *RetrievalFilters {
 		if value := strings.TrimSpace(override.Namespace); value != "" {
 			merged.Namespace = value
 		}
+		if value := strings.TrimSpace(override.ReviewStatus); value != "" {
+			merged.ReviewStatus = value
+		}
 	}
 	if retrievalFiltersEmpty(merged) {
 		return nil
@@ -229,7 +233,8 @@ func retrievalFiltersEmpty(filters RetrievalFilters) bool {
 		filters.UserID == "" &&
 		filters.SessionID == "" &&
 		filters.Scope == "" &&
-		filters.Namespace == ""
+		filters.Namespace == "" &&
+		filters.ReviewStatus == ""
 }
 
 func mergeUniqueStrings(groups ...[]string) []string {
@@ -271,7 +276,7 @@ func (db *DB) filterScoredEmbeddings(ctx context.Context, results []core.ScoredE
 	for _, result := range results {
 		ids = append(ids, result.DocID)
 	}
-	hidden := db.hiddenAmong(ctx, ids)
+	hidden := db.hiddenAmong(ctx, filters, ids)
 	filtered := make([]core.ScoredEmbedding, 0, len(results))
 	for _, result := range results {
 		if allowDocument(filters, hidden, result.DocID) {
@@ -289,13 +294,25 @@ func (db *DB) filterScoredEmbeddings(ctx context.Context, results []core.ScoredE
 // A caller's own filters run after it, on what it kept, as on main: they do
 // not make it read further.
 func (db *DB) gatedSearch(ctx context.Context, topK int, search func(k int) ([]core.ScoredEmbedding, error)) ([]core.ScoredEmbedding, error) {
+	return db.gatedSearchFor(ctx, topK, "", search)
+}
+
+// gatedSearchFor is gatedSearch under the review status a plan asks for,
+// which is part of the gate: the review gate hides the other statuses, so
+// the refill counts them as hidden. The plan's other filters still run
+// after it.
+func (db *DB) gatedSearchFor(ctx context.Context, topK int, reviewStatus string, search func(k int) ([]core.ScoredEmbedding, error)) ([]core.ScoredEmbedding, error) {
+	var gate *RetrievalFilters
+	if reviewStatus != "" {
+		gate = &RetrievalFilters{ReviewStatus: reviewStatus}
+	}
 	k := topK
 	for {
 		raw, err := search(k)
 		if err != nil {
 			return nil, err
 		}
-		kept := db.filterScoredEmbeddings(ctx, raw, nil)
+		kept := db.filterScoredEmbeddings(ctx, raw, gate)
 		if topK <= 0 || len(kept) >= topK || len(raw) < k {
 			if topK > 0 && len(kept) > topK {
 				kept = kept[:topK]
@@ -316,4 +333,12 @@ func allowDocumentID(filters *RetrievalFilters, documentID string) bool {
 		}
 	}
 	return false
+}
+
+// reviewStatusOf is the review status a plan's filters ask for, or "".
+func reviewStatusOf(filters *RetrievalFilters) string {
+	if filters == nil {
+		return ""
+	}
+	return filters.ReviewStatus
 }

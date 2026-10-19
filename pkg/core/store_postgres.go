@@ -120,6 +120,7 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 		// The read-time expiry filter (pkg/cortexdb/expiry.go) selects the
 		// documents that carry metadata _expires_at; this is its expression.
 		`CREATE INDEX IF NOT EXISTS idx_documents_expires_at ON documents ((CASE WHEN NULLIF(metadata::text, '') IS NOT NULL THEN (NULLIF(metadata::text, '')::jsonb ->> '_expires_at') ELSE NULL END))`,
+		`CREATE INDEX IF NOT EXISTS idx_documents_review_status ON documents ((CASE WHEN NULLIF(metadata::text, '') IS NOT NULL THEN (NULLIF(metadata::text, '')::jsonb ->> '_review_status') ELSE NULL END))`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS embeddings (
 			id TEXT PRIMARY KEY,
 			collection_id INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,

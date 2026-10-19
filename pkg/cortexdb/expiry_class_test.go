@@ -86,6 +86,14 @@ var readToolsAndTheExpiry = map[string]string{
 
 func TestEveryReadToolIsGatedOrNamed(t *testing.T) {
 	db, tools, ctx := openIngestBrain(t, "read-class")
+	everyGatedToolHides(t, db, tools, ctx, func(r *KnowledgeSaveRequest) { r.ExpiresAt = strPtr(pastInstant()) })
+}
+
+// everyGatedToolHides saves the document "old", hidden by hide, and the
+// document "live", then calls every gated read tool and checks that none
+// returns the hidden one and each returns the live one.
+func everyGatedToolHides(t *testing.T, db *DB, tools *GraphRAGToolbox, ctx context.Context, hide func(*KnowledgeSaveRequest)) {
+	t.Helper()
 	oldChunk, liveChunk := graphChunkNodeID("old", 0), graphChunkNodeID("live", 0)
 	// Each document mentions Arvid Lund and a place, and states one
 	// relation between them with its chunk as provenance, so the path and
@@ -95,7 +103,9 @@ func TestEveryReadToolIsGatedOrNamed(t *testing.T) {
 			[]ToolRelationInput{{From: "Arvid Lund", To: place, Type: relation, ChunkIDs: []string{chunk}}}
 	}
 	oldEntities, oldRelations := facts(oldChunk, "Lund", "raised_in")
-	if _, err := db.SaveKnowledge(ctx, KnowledgeSaveRequest{KnowledgeID: "old", Content: "Arvid Lund grew up by the harbour of Lund.", Entities: oldEntities, Relations: oldRelations, ExpiresAt: strPtr(pastInstant())}); err != nil {
+	old := KnowledgeSaveRequest{KnowledgeID: "old", Content: "Arvid Lund grew up by the harbour of Lund.", Entities: oldEntities, Relations: oldRelations}
+	hide(&old)
+	if _, err := db.SaveKnowledge(ctx, old); err != nil {
 		t.Fatal(err)
 	}
 	liveEntities, liveRelations := facts(liveChunk, "Uppsala", "teaches_in")

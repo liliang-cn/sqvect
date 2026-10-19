@@ -108,11 +108,12 @@ type toolRule struct {
 	// most: the tool reads one and ignores the other, and the guard must
 	// read the one the tool reads.
 	oneOf []string
-	// rewritten is true for a tool whose facade writes the engine's own
-	// document keys (cortexdb.EngineDocumentKeys) over the caller's: a
-	// document read back and sent again carries them, and they are not
-	// refused under their exact spelling.
-	rewritten bool
+	// rewritten lists, for a tool whose facade writes the engine's own keys
+	// over the caller's (cortexdb.EngineDocumentKeys on a document,
+	// cortexdb.EngineMemoryKeys on a memory), those keys: a row read back and
+	// sent again carries them, and they are not refused under their exact
+	// spelling.
+	rewritten func() []string
 }
 
 // Argument fragments shared by several tools.
@@ -123,13 +124,17 @@ var (
 	// nothing, exactly as a document that does not exist. Loading it here and
 	// refusing it would tell the two apart.
 	planArgs = []string{"plan", "plan.query", "plan.keywords", "plan.alternate_queries", "plan.entity_names", "plan.retrieval_mode",
-		"plan.filters", "plan.filters.collection", "plan.filters.user_id", "plan.filters.scope", "plan.filters.namespace", "plan.filters.session_id", "plan.filters.document_ids"}
+		"plan.filters", "plan.filters.collection", "plan.filters.user_id", "plan.filters.scope", "plan.filters.namespace", "plan.filters.session_id", "plan.filters.document_ids",
+		"plan.filters.review_status"}
 	pprArgs    = []string{"ppr", "ppr.damping", "ppr.fusion", "ppr.passage_seed_weight"}
 	queryArgs  = []string{"query", "keywords", "alternate_queries", "retrieval_mode", "disable_graph", "graph_light", "max_entities_per_chunk"}
 	walkArgs   = []string{"entity_names", "chunk_window", "max_context_chars", "max_context_chunks", "per_document_limit", "max_related_chunks", "max_expansion_seeds", "max_hops", "max_traversal_nodes"}
 	recallArgs = []string{"top_k_knowledge", "top_k_memories", "max_memory_chars", "max_memory_items", "session_id"}
+	// The review fields are data: the facade takes the calling key as the
+	// reviewer and refuses another name, so a decision names who made it.
+	reviewArgs = []string{"review_status", "reviewed_by", "reviewed_at"}
 	memoryArgs = []string{"content", "role", "importance", "ttl_seconds", "session_id", "metadata.*"}
-	docArgs    = []string{"content", "title", "source_url", "author", "metadata.*", "chunk_size", "chunk_overlap", "expires_at"}
+	docArgs    = paths([]string{"content", "title", "source_url", "author", "metadata.*", "chunk_size", "chunk_overlap", "expires_at"}, reviewArgs)
 	// An entity or a relation the caller declares is a node or an edge of
 	// the shared graph, keyed by name across every collection, so declaring
 	// one rewrites what every collection sees: its description, its
@@ -185,11 +190,11 @@ func paths(lists ...[]string) []string {
 // confinedTools is the allowlist.
 var confinedTools = map[string]toolRule{
 	// Knowledge: one collection, named at the top level.
-	"ingest_document": {scope: collectionScope, stores: storeKnowledge, rewritten: true,
+	"ingest_document": {scope: collectionScope, stores: storeKnowledge, rewritten: cortexdb.EngineDocumentKeys,
 		args: paths(docArgs, []string{"dedupe"}), ids: []idField{{"document_id", idKnowledge}}},
-	"knowledge_save": {scope: collectionScope, stores: storeKnowledge, rewritten: true,
+	"knowledge_save": {scope: collectionScope, stores: storeKnowledge, rewritten: cortexdb.EngineDocumentKeys,
 		args: docArgs, ids: []idField{{"knowledge_id", idKnowledge}}, denied: graphDenied},
-	"knowledge_update": {scope: collectionScope, stores: storeKnowledge, rewritten: true,
+	"knowledge_update": {scope: collectionScope, stores: storeKnowledge, rewritten: cortexdb.EngineDocumentKeys,
 		args: docArgs, ids: []idField{{"knowledge_id", idKnowledge}}, denied: graphDenied},
 	"knowledge_search": {scope: collectionScope, stores: storeKnowledge,
 		args: paths(queryArgs, walkArgs, planArgs, pprArgs, []string{"top_k", "diversity_lambda"})},
@@ -217,9 +222,9 @@ var confinedTools = map[string]toolRule{
 	// session_id picks is held to the key's scope by the facade
 	// (cortexdb.CallerScope, set by Key.CallerContext), so session_id is data
 	// here.
-	"memory_save": {scope: memoryScope, stores: storeMemory,
-		args: memoryArgs, ids: []idField{{"memory_id", idMemory}, {"supersedes", idMemory}}, denied: graphDenied},
-	"knowledge_memory_remember": {scope: memoryScope, stores: storeMemory,
+	"memory_save": {scope: memoryScope, stores: storeMemory, rewritten: cortexdb.EngineMemoryKeys,
+		args: paths(memoryArgs, reviewArgs), ids: []idField{{"memory_id", idMemory}, {"supersedes", idMemory}}, denied: graphDenied},
+	"knowledge_memory_remember": {scope: memoryScope, stores: storeMemory, rewritten: cortexdb.EngineMemoryKeys,
 		args: memoryArgs, ids: []idField{{"memory_id", idMemory}}},
 	"memory_search": {scope: memoryScope, stores: storeMemory,
 		args: paths(queryArgs[:4], planArgs, pprArgs, []string{"entity_names", "top_k", "session_id"})},
@@ -229,7 +234,7 @@ var confinedTools = map[string]toolRule{
 	// The facade reads the list and ignores memory_id when both are set, so a
 	// call sends one form.
 	"memory_get":    {stores: storeMemory, args: []string{"memory_ids"}, ids: []idField{{"memory_id", idMemory}}, oneOf: []string{"memory_id", "memory_ids"}},
-	"memory_update": {stores: storeMemory, args: []string{"content", "importance", "ttl_seconds", "metadata.*"}, ids: []idField{{"memory_id", idMemory}}},
+	"memory_update": {stores: storeMemory, rewritten: cortexdb.EngineMemoryKeys, args: paths([]string{"content", "importance", "ttl_seconds", "metadata.*"}, reviewArgs), ids: []idField{{"memory_id", idMemory}}},
 	"memory_delete": {stores: storeMemory, ids: []idField{{"memory_id", idMemory}}},
 
 	// Both stores, each behind its gate. Recall adds no graph facts for a
@@ -482,13 +487,13 @@ func (r toolRule) checkPaths(obj map[string]any) error {
 // reserves by a leading "_", and a document's metadata takes none of the
 // keys the engine writes on every chunk. A filter map (filters.*, filter.*)
 // reads, so it may name an engine key: that is how a curator lists what
-// waits. A tool whose facade rewrites the engine's document keys takes them
-// back under their exact spelling.
+// waits. A tool whose facade rewrites engine keys takes them back under
+// their exact spelling.
 func (r toolRule) checkOpenKeys(path string, v any) error {
 	obj, _ := v.(map[string]any)
 	meta := path == "metadata"
 	for key := range obj {
-		if meta && r.rewritten && slices.Contains(cortexdb.EngineDocumentKeys(), key) {
+		if meta && r.rewritten != nil && slices.Contains(r.rewritten(), key) {
 			continue
 		}
 		lower := strings.ToLower(key)

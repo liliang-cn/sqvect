@@ -66,6 +66,13 @@ type ToolIngestDocumentRequest struct {
 	// does not lift a retention rule. A metadata key named expires_at is the
 	// caller's and is not read.
 	ExpiresAt *string `json:"expires_at,omitempty"`
+	// ReviewStatus, ReviewedBy and ReviewedAt decide the review: proposed,
+	// accepted or rejected, who decided (the calling key when there is one),
+	// and when (now when left out). Left out, the stored decision is kept,
+	// whatever the write does with metadata: a decision is never cleared.
+	ReviewStatus string `json:"review_status,omitempty"`
+	ReviewedBy   string `json:"reviewed_by,omitempty"`
+	ReviewedAt   string `json:"reviewed_at,omitempty"`
 }
 
 // ToolIngestDocumentResponse summarizes lexical ingestion output.
@@ -309,4 +316,8 @@ func (db *DB) GraphRAGTools() *GraphRAGToolbox {
 // Query runs the composable CortexDB Query API through the toolbox surface.
 func (t *GraphRAGToolbox) Query(ctx context.Context, req QueryRequest) (*QueryResponse, error) {
 	return t.db.Query(ctx, req)
+}
+
+func (r ToolIngestDocumentRequest) review() reviewFields {
+	return reviewFields{Status: r.ReviewStatus, By: r.ReviewedBy, At: r.ReviewedAt}
 }

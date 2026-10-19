@@ -27,6 +27,11 @@ type RetrievalFilters struct {
 	SessionID   string   `json:"session_id,omitempty"`
 	Scope       string   `json:"scope,omitempty"`
 	Namespace   string   `json:"namespace,omitempty"`
+	// ReviewStatus keeps only documents of that review status (proposed,
+	// accepted, rejected). Left out, every document is served, unless the
+	// brain runs with the review gate, which hides proposed and rejected
+	// documents. Memories ignore it. See review.go.
+	ReviewStatus string `json:"review_status,omitempty"`
 }
 
 // RetrievalDecision explains how CortexDB interpreted the caller's requested mode.

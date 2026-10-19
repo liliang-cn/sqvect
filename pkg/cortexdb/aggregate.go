@@ -2,6 +2,7 @@ package cortexdb
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
@@ -30,17 +31,53 @@ import (
 // outside a conservative identifier shape is refused rather than escaped. See
 // validateAggregationRequest.
 func (db *DB) Aggregate(ctx context.Context, req core.AggregationRequest) (*core.AggregationResponse, error) {
-	req.ExcludeDocuments, req.ExcludeDocumentsArgs = db.hiddenDocumentsWhere()
+	want, statusFiltered := req.Filters[reviewStatusKey]
+	if statusFiltered {
+		req.Filters = withoutKey(req.Filters, reviewStatusKey)
+		req.OnlyDocuments, req.OnlyDocumentsArgs = db.reviewStatusIs(want)
+	}
+	req.ExcludeDocuments, req.ExcludeDocumentsArgs = db.hiddenDocumentsWhere(statusFiltered)
 	return db.store.Aggregate(ctx, req)
+}
+
+// reviewStatusIs is the condition on the documents table that a filter on
+// _review_status becomes: the decision lives on the record alone, so the
+// filter reads the record, and a decision made by knowledge_update counts
+// at once. accepted takes a document with no status too, as in a plan's
+// filters. A row that belongs to no document has no status and is left out.
+func (db *DB) reviewStatusIs(want any) (string, []interface{}) {
+	expr := db.Dialect().JSONTextGuarded("metadata", reviewStatusKey)
+	if fmt.Sprint(want) == ReviewAccepted {
+		return "(" + expr + " IS NULL OR " + expr + " = '' OR " + expr + " = ?)", []interface{}{ReviewAccepted}
+	}
+	return expr + " = ?", []interface{}{fmt.Sprint(want)}
+}
+
+// withoutKey is a copy of m without key; the caller's map is left as it is.
+func withoutKey[V any](m map[string]V, key string) map[string]V {
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		if k != key {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // hiddenDocumentsWhere is the condition on the documents table that selects
 // every document the gate hides, for the aggregates, whose rows the store
 // counts and compares without loading them through a chunk path. It is one
 // condition, not a list of ids, so the number of hidden documents never
-// reaches the bound-parameter limit of either store.
-func (db *DB) hiddenDocumentsWhere() (string, []interface{}) {
-	return db.expiredPredicate(), []interface{}{instant(time.Now())}
+// reaches the bound-parameter limit of either store. When the caller filters
+// on the review status itself, the review gate hides nothing and the filter
+// decides: that is how a curator lists what waits. Expired documents stay
+// out either way.
+func (db *DB) hiddenDocumentsWhere(statusFiltered bool) (string, []interface{}) {
+	where := db.expiredPredicate()
+	if review := db.reviewHiddenPredicate(""); review != "" && !statusFiltered {
+		where = `(` + where + ` OR ` + review + `)`
+	}
+	return where, []interface{}{instant(time.Now())}
 }
 
 // SearchWithFacets filters a vector search by metadata facets and, when asked,
@@ -78,7 +115,12 @@ func (db *DB) SearchWithFacets(ctx context.Context, query []float32, opts core.F
 // these near-duplicates is the canonical one" and "give me the one record that
 // represents this cluster" with arithmetic and no model in the loop.
 func (db *DB) VectorAggregate(ctx context.Context, req core.VectorAggregateRequest) (*core.VectorAggregateResponse, error) {
-	req.ExcludeDocuments, req.ExcludeDocumentsArgs = db.hiddenDocumentsWhere()
+	want, statusFiltered := req.Filter[reviewStatusKey]
+	if statusFiltered {
+		req.Filter = withoutKey(req.Filter, reviewStatusKey)
+		req.OnlyDocuments, req.OnlyDocumentsArgs = db.reviewStatusIs(want)
+	}
+	req.ExcludeDocuments, req.ExcludeDocumentsArgs = db.hiddenDocumentsWhere(statusFiltered)
 	return db.store.VectorAggregate(ctx, req)
 }
 

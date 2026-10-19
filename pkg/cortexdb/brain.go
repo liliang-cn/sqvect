@@ -149,6 +149,11 @@ func (b *KnowledgeMemory) PromoteToKnowledge(ctx context.Context, req KnowledgeM
 		if err != nil {
 			return nil, err
 		}
+		// Promoted, a memory the gate hides would be served as knowledge
+		// before anyone accepts it.
+		if b.db.memoryUnreviewed(memoryResp.Memory) {
+			return nil, fmt.Errorf("memory %s is %s: the review gate promotes no memory before it is accepted", memoryID, memoryResp.Memory.ReviewStatus)
+		}
 		memories = append(memories, memoryResp.Memory)
 		contentParts = append(contentParts, strings.TrimSpace(memoryResp.Memory.Content))
 		sourceScopes = append(sourceScopes, strings.TrimSpace(memoryResp.Memory.Scope))

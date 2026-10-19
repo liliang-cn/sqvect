@@ -48,6 +48,9 @@ type TextSearchOptions struct {
 	// question through SearchTextOnly and add the CJK bigram path once
 	// themselves, so it is not repeated for every phrasing.
 	skipCJKBigrams bool
+	// reviewStatus is the review status the plan of a tool lane asks for,
+	// so that the gate keeps it instead of hiding it first.
+	reviewStatus string
 }
 
 // InsertText inserts text with automatic embedding generation.
@@ -317,7 +320,7 @@ func (db *DB) SearchTextOnly(ctx context.Context, query string, opts TextSearchO
 		return out, nil
 	}
 
-	return db.gatedSearch(ctx, opts.TopK, func(k int) ([]core.ScoredEmbedding, error) {
+	return db.gatedSearchFor(ctx, opts.TopK, opts.reviewStatus, func(k int) ([]core.ScoredEmbedding, error) {
 		inner := opts
 		inner.TopK = k
 		return db.searchTextOnlyAll(ctx, query, inner)

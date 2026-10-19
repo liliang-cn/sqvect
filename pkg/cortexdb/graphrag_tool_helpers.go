@@ -103,7 +103,7 @@ func (t *GraphRAGToolbox) loadToolChunks(ctx context.Context, scoreMap map[strin
 	for _, emb := range embeddings {
 		docIDs = append(docIDs, emb.DocumentID)
 	}
-	hidden := t.db.hiddenAmong(ctx, docIDs)
+	hidden := t.db.hiddenAmong(ctx, nil, docIDs)
 	chunks := make([]ToolChunk, 0, len(orderedIDs))
 	for _, chunkID := range orderedIDs {
 		emb, ok := embeddings[chunkID]

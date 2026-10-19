@@ -70,6 +70,11 @@ type VectorAggregateRequest struct {
 	// so it is set by the facade and never read from a request's JSON.
 	ExcludeDocuments     string        `json:"-"`
 	ExcludeDocumentsArgs []interface{} `json:"-"`
+	// OnlyDocuments keeps only the rows of the documents this condition on
+	// the documents table selects, with one ? per OnlyDocumentsArgs; rows
+	// that belong to no document are left out. Set by the facade only.
+	OnlyDocuments     string        `json:"-"`
+	OnlyDocumentsArgs []interface{} `json:"-"`
 }
 
 // VectorAggregateGroup is the answer for one group.
@@ -250,6 +255,7 @@ func buildVectorAggregateQuery(d sqldialect.Dialect, vectorExpr string, req Vect
 		args = append(args, req.Filter[k])
 	}
 	query, args = excludeDocuments(query, args, req.ExcludeDocuments, req.ExcludeDocumentsArgs)
+	query, args = onlyDocuments(query, args, req.OnlyDocuments, req.OnlyDocumentsArgs)
 
 	// The real ordering guarantee is applied in Go below; this only keeps the
 	// scan itself stable, which makes a query plan and a log line reproducible.

@@ -31,3 +31,26 @@ func TestThePostgresAggregateWhereExcludesDocumentsByOneSubquery(t *testing.T) {
 		t.Fatalf("no exclusion rendered %q", where)
 	}
 }
+
+// A condition that keeps only some documents renders as its own subquery,
+// after the exclusion, and its ? take the numbers that follow.
+func TestThePostgresAggregateWhereKeepsOnlyTheSelectedDocuments(t *testing.T) {
+	args := &pgArgs{}
+	where := pgAggregateWhere(AggregationRequest{
+		ExcludeDocuments:     "kind = ?",
+		ExcludeDocumentsArgs: []interface{}{"gone"},
+		OnlyDocuments:        "status = ? OR status = ?",
+		OnlyDocumentsArgs:    []interface{}{"proposed", "rejected"},
+	}, args)
+
+	want := []string{
+		"(doc_id IS NULL OR doc_id NOT IN (SELECT id FROM documents WHERE kind = $1))",
+		"doc_id IN (SELECT id FROM documents WHERE status = $2 OR status = $3)",
+	}
+	if !reflect.DeepEqual(where, want) {
+		t.Fatalf("where = %q, want %q", where, want)
+	}
+	if !reflect.DeepEqual(args.vals, []any{"gone", "proposed", "rejected"}) {
+		t.Fatalf("args = %v, want [gone proposed rejected]", args.vals)
+	}
+}

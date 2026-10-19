@@ -31,7 +31,7 @@ func TestATypedWriteTakesWhatTheAllowlistLineOfItsToolTakes(t *testing.T) {
 	for _, c := range []struct{ secret, path, body, want string }{
 		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","entities":[{"name":"Project Nightshade","description":"defaced"}]}`, "entities"},
 		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","relations":[{"from":"Project Nightshade","to":"Orpheus","type":"funds"}]}`, "relations"},
-		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","metadata":{"_review_status":"accepted"}}`, "metadata._review_status"},
+		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","metadata":{"_scope":"global"}}`, "metadata._scope"},
 		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","metadata":{"Chunk_Index":"0"}}`, "metadata.chunk_index"},
 		{"hermes-secret", "/v1/memory", `{"memory_id":"h1","user_id":"hermes","scope":"user","content":"x","metadata":{"_scope":"global"}}`, "metadata._scope"},
 		// The handler's decoder matches a field name by Unicode case folding,
@@ -39,7 +39,7 @@ func TestATypedWriteTakesWhatTheAllowlistLineOfItsToolTakes(t *testing.T) {
 		// its Metadata. The check reads the body as the decoder does.
 		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","entitieſ":[{"name":"Project Nightshade","description":"defaced"}]}`, "entities"},
 		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","relationſ":[{"from":"Project Nightshade","to":"Orpheus","type":"funds"}]}`, "relations"},
-		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","METADATA":{"_review_status":"accepted"}}`, "metadata._review_status"},
+		{"notes-secret", "/v1/knowledge", `{"knowledge_id":"n1","collection":"notes","content":"x","METADATA":{"_scope":"global"}}`, "metadata._scope"},
 		{"hermes-secret", "/v1/memory", `{"memory_id":"h1","user_id":"hermes","scope":"user","content":"x","entitieſ":[{"name":"Project Nightshade","description":"defaced"}]}`, "entities"},
 		{"hermes-secret", "/v1/memory", `{"memory_id":"h1","user_id":"hermes","scope":"user","content":"x","Relationſ":[{"from":"Project Nightshade","to":"Orpheus","type":"funds"}]}`, "relations"},
 		// The decoder keeps the last of two spellings, so an empty one after

@@ -54,6 +54,16 @@ func openBrainDB(dbPath string) (*cortexdb.DB, error) {
 		}
 		opts = append(opts, cortexdb.WithMemorySemanticFloor(floor))
 	}
+	// Off unless asked: a brain that never reviews anything searches as before.
+	if v := os.Getenv("CORTEXDB_REVIEW_GATE"); v != "" {
+		on, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("invalid CORTEXDB_REVIEW_GATE %q: want 1 or 0", v)
+		}
+		if on {
+			opts = append(opts, cortexdb.WithReviewGate())
+		}
+	}
 	if qt := newQueryTransformer(); qt != nil {
 		opts = append(opts, cortexdb.WithQueryTransformer(qt))
 	}

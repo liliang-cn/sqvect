@@ -80,20 +80,41 @@ func (db *DB) expiredPredicate() string {
 	return `(` + expr + ` > '' AND ` + expr + ` <= ?)`
 }
 
+// hiddenPredicate is the whole gate in SQL: expired at the instant bound to
+// the placeholder, or hidden by the review predicate given, which is empty
+// when nothing is hidden for its review status (the sweep, which removes
+// what has expired and nothing else; an aggregate whose caller filters the
+// status itself).
+func (db *DB) hiddenPredicate(review string) string {
+	where := db.expiredPredicate()
+	if review != "" {
+		where = `(` + where + ` OR ` + review + `)`
+	}
+	return where
+}
+
 // visiblePredicate is the negation of expiredPredicate, spelled out because
 // a document with no expiry makes the expression NULL, and NOT NULL is not
 // true: no expiry, an empty one, or one past the instant bound to the
-// placeholder.
+// placeholder. The review gate is not part of it: the dedupe lookup, its
+// one caller, is about content, and a proposed or rejected document still
+// holds its content.
 func (db *DB) visiblePredicate() string {
 	expr := db.Dialect().JSONTextGuarded("metadata", expiresAtKey)
 	return `(` + expr + ` IS NULL OR ` + expr + ` <= '' OR ` + expr + ` > ?)`
 }
 
 // recordOnlyKey reports whether a metadata key lives on the document record
-// alone and is not copied onto its chunks or its graph node: the gate reads
-// the documents table, and a copy would go stale when knowledge_update
-// changes the key and nothing else.
-func recordOnlyKey(key string) bool { return key == expiresAtKey }
+// alone and is not copied onto its chunks or its graph node: the gates and
+// the aggregates' status filter read the documents table, and a copy would
+// go stale when knowledge_update changes the key and nothing else.
+func recordOnlyKey(key string) bool {
+	switch key {
+	case expiresAtKey, reviewStatusKey, reviewedByKey, reviewedAtKey:
+		return true
+	}
+	return false
+}
 
 // instant is the form of now the predicate compares against.
 func instant(now time.Time) string { return now.UTC().Format(time.RFC3339) }
@@ -103,8 +124,8 @@ func instant(now time.Time) string { return now.UTC().Format(time.RFC3339) }
 // query per call, through the expression index, and nothing is kept across
 // calls: a second process on the same file or server, and the sweep, see an
 // expiry the moment it is written.
-func (db *DB) hiddenDocuments(ctx context.Context, now time.Time, among []string) (map[string]struct{}, error) {
-	query := `SELECT id FROM documents WHERE ` + db.expiredPredicate()
+func (db *DB) hiddenDocuments(ctx context.Context, now time.Time, review string, among []string) (map[string]struct{}, error) {
+	query := `SELECT id FROM documents WHERE ` + db.hiddenPredicate(review)
 	args := []any{instant(now)}
 	if among != nil {
 		if len(among) == 0 {
@@ -145,13 +166,26 @@ func documentIDsOf(ids []string) []string {
 	return out
 }
 
-// hiddenAmong is hiddenDocuments for a read path: advisory, because the
-// sweep is the guarantee, so a brain whose documents cannot be read hides
-// nothing rather than everything.
-func (db *DB) hiddenAmong(ctx context.Context, ids []string) map[string]struct{} {
-	hidden, err := db.hiddenDocuments(ctx, time.Now(), documentIDsOf(ids))
+// hiddenAmong is hiddenDocuments for a read path, with the review status
+// the filters ask for. On a brain whose documents cannot be read it is
+// advisory for the expiry, because the sweep is the guarantee, and closed
+// under the review gate or a status filter, whose whole point is to hide,
+// and which an outage must not lift: every document met is then hidden.
+func (db *DB) hiddenAmong(ctx context.Context, filters *RetrievalFilters, ids []string) map[string]struct{} {
+	want := ""
+	if filters != nil {
+		want = filters.ReviewStatus
+	}
+	ids = documentIDsOf(ids)
+	hidden, err := db.hiddenDocuments(ctx, time.Now(), db.reviewHiddenPredicate(want), ids)
 	if err != nil {
-		return nil
+		if !db.reviewGate && want == "" {
+			return nil
+		}
+		hidden = make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			hidden[id] = struct{}{}
+		}
 	}
 	return hidden
 }
@@ -182,7 +216,7 @@ func (db *DB) SweepExpired(ctx context.Context, now time.Time, dryRun bool) (*Ex
 	now = now.UTC()
 	report := &ExpiredSweepReport{Now: now, DryRun: dryRun, Documents: []string{}, Memories: []string{}}
 
-	hidden, err := db.hiddenDocuments(ctx, now, nil)
+	hidden, err := db.hiddenDocuments(ctx, now, "", nil)
 	if err != nil {
 		return nil, err
 	}

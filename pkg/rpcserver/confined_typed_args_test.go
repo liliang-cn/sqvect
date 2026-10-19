@@ -65,9 +65,9 @@ func TestATypedWriteTakesWhatTheAllowlistLineOfItsToolTakes(t *testing.T) {
 			return err
 		}, "relations"},
 		{"SaveKnowledge engine key", func(ctx context.Context) error {
-			_, err := knowledge.SaveKnowledge(ctx, &rpcv1.SaveKnowledgeRequest{KnowledgeId: "n1", Collection: "notes", Content: "x", Metadata: map[string]string{"_review_status": "accepted"}})
+			_, err := knowledge.SaveKnowledge(ctx, &rpcv1.SaveKnowledgeRequest{KnowledgeId: "n1", Collection: "notes", Content: "x", Metadata: map[string]string{"_scope": "global"}})
 			return err
-		}, "metadata._review_status"},
+		}, "metadata._scope"},
 		{"UpdateKnowledge entities", func(ctx context.Context) error {
 			_, err := knowledge.UpdateKnowledge(ctx, &rpcv1.UpdateKnowledgeRequest{KnowledgeId: "n1", Collection: proto.String("notes"), Entities: entity})
 			return err

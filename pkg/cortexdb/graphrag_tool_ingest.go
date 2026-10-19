@@ -58,6 +58,9 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 	if err := carryExpiry(metadata, stored, req.ExpiresAt); err != nil {
 		return nil, err
 	}
+	if err := setReview(ctx, metadata, stored, req.review()); err != nil {
+		return nil, err
+	}
 	// Content that is not blank splits into at least one chunk.
 	chunks := splitGraphRAGText(req.Content, ingestOpts.ChunkSize, ingestOpts.ChunkOverlap)
 
@@ -253,14 +256,24 @@ const (
 
 // EngineDocumentKeys are the metadata keys the facade rewrites on every
 // write of a document's metadata (ingest_document, SaveKnowledge,
-// UpdateKnowledge): the marks of its content and its chunking, and its
-// expiry, which only the expires_at field sets. A caller's copy of them is
-// replaced, or dropped by InsertGraphDocument, which writes no mark and
-// keeps the stored expiry, so the allowlist lets a document read back be
-// sent again with them. Other engine keys, such as importflow's _table, are
-// not rewritten and are not listed.
+// UpdateKnowledge): the marks of its content and its chunking, its expiry,
+// which only the expires_at field sets, and its review decision, which only
+// the review fields set. A caller's copy of them is replaced, or dropped by
+// InsertGraphDocument, which writes no mark and keeps the stored expiry and
+// decision, so the allowlist lets a document read back be sent again with
+// them. Other engine keys, such as importflow's _table, are not rewritten
+// and are not listed.
 func EngineDocumentKeys() []string {
-	return []string{contentHashKey, chunkSizeKey, chunkOverlapKey, expiresAtKey}
+	return []string{contentHashKey, chunkSizeKey, chunkOverlapKey, expiresAtKey, reviewStatusKey, reviewedByKey, reviewedAtKey}
+}
+
+// EngineMemoryKeys are the metadata keys the facade rewrites on every write
+// of a memory's metadata (memory_save, memory_update, and their typed
+// routes): its review decision, which only the review fields set. A
+// caller's copy of them is replaced, so the allowlist lets a memory read
+// back be sent again with them.
+func EngineMemoryKeys() []string {
+	return []string{reviewStatusKey, reviewedByKey, reviewedAtKey}
 }
 
 func contentSHA256(content string) string {

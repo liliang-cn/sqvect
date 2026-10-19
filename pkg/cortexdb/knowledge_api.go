@@ -43,6 +43,9 @@ func (db *DB) SaveKnowledge(ctx context.Context, req KnowledgeSaveRequest) (*Kno
 		return nil, err
 	}
 	stampWriter(ctx, metadata, plainString)
+	if err := setReview(ctx, metadata, storedMetadata(existing), req.review()); err != nil {
+		return nil, err
+	}
 	stampIngestMarks(metadata, req.Content, resolvedIngestOptions(req.Collection, req.ChunkSize, req.ChunkOverlap))
 	version := 1
 	if existing != nil {
@@ -121,11 +124,14 @@ func (db *DB) UpdateKnowledge(ctx context.Context, req KnowledgeUpdateRequest) (
 	if req.Metadata != nil {
 		metadata = cloneStringMap(req.Metadata)
 	}
-	if metadata == nil && (writerOf(ctx) != "" || req.ExpiresAt != nil) {
+	if metadata == nil && (writerOf(ctx) != "" || req.ExpiresAt != nil || req.ReviewStatus != "") {
 		metadata = map[string]string{}
 	}
 	if metadata != nil {
 		if err := carryExpiry(metadata, existing.Metadata, req.ExpiresAt); err != nil {
+			return nil, err
+		}
+		if err := setReview(ctx, metadata, existing.Metadata, req.review()); err != nil {
 			return nil, err
 		}
 	}

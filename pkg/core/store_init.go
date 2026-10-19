@@ -154,6 +154,7 @@ func (s *SQLiteStore) createTables(ctx context.Context) error {
 	-- The read-time expiry filter (pkg/cortexdb/expiry.go) selects the documents
 	-- that carry metadata _expires_at; this is its expression, indexed.
 	CREATE INDEX IF NOT EXISTS idx_documents_expires_at ON documents ((CASE WHEN json_valid(metadata) = 1 THEN json_extract(metadata, '$._expires_at') ELSE NULL END));
+	CREATE INDEX IF NOT EXISTS idx_documents_review_status ON documents ((CASE WHEN json_valid(metadata) = 1 THEN json_extract(metadata, '$._review_status') ELSE NULL END));
 
 	CREATE INDEX IF NOT EXISTS idx_embeddings_collection_id ON embeddings(collection_id);
 	CREATE INDEX IF NOT EXISTS idx_embeddings_doc_id ON embeddings(doc_id);

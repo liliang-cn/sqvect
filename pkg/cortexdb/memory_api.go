@@ -129,6 +129,17 @@ func (db *DB) SaveMemory(ctx context.Context, req MemorySaveRequest) (*MemorySav
 
 	metadata := buildMemoryMetadata(scope, normalizeMemoryNamespace(req.Namespace), req.Metadata, req.Importance, req.TTLSeconds)
 	stampWriter(ctx, metadata, anyString)
+	// A re-save over an existing id keeps its decision, as an update does:
+	// a proposed memory saved again is still proposed.
+	var stored map[string]any
+	if row, err := db.loadMemoryRow(ctx, req.MemoryID); err == nil {
+		stored = row.record.Metadata
+	} else if !errors.Is(err, core.ErrNotFound) {
+		return nil, err
+	}
+	if err := setReviewAny(ctx, metadata, stored, req.review()); err != nil {
+		return nil, err
+	}
 	vectorBytes, err := db.embedMemoryContent(ctx, req.Content)
 	if err != nil {
 		return nil, err
@@ -205,6 +216,9 @@ func (db *DB) UpdateMemory(ctx context.Context, req MemoryUpdateRequest) (*Memor
 	}
 	metadata = buildMemoryMetadata(row.record.Scope, row.record.Namespace, metadata, importance, ttlSeconds)
 	stampUpdater(ctx, metadata, row.record.Metadata, anyString)
+	if err := setReviewAny(ctx, metadata, row.record.Metadata, req.review()); err != nil {
+		return nil, err
+	}
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, fmt.Errorf("marshal memory metadata: %w", err)
@@ -424,7 +438,7 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 						continue
 					}
 					record := memoryRecordFromMessage(bucketID, "", sm.Message)
-					if memoryExpired(record) || memorySuperseded(record) {
+					if memoryExpired(record) || memorySuperseded(record) || db.memoryUnreviewed(record) {
 						continue
 					}
 					semanticHits = append(semanticHits, MemorySearchHit{
@@ -738,7 +752,7 @@ func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, k
 				}
 			}
 			applyMemoryMetadata(&record)
-			if memoryExpired(record) || memorySuperseded(record) {
+			if memoryExpired(record) || memorySuperseded(record) || db.memoryUnreviewed(record) {
 				continue
 			}
 
@@ -885,6 +899,8 @@ func applyMemoryMetadata(record *MemoryRecord) {
 			record.ExpiresAt = &parsed
 		}
 	}
+	record.ReviewStatus, _ = stringFromAny(record.Metadata[reviewStatusKey])
+	record.ReviewedBy, _ = stringFromAny(record.Metadata[reviewedByKey])
 }
 
 func memoryRecordFromMessage(sessionID, userID string, message *core.Message) MemoryRecord {
@@ -1089,7 +1105,7 @@ func (db *DB) searchMemoryGraph(ctx context.Context, bucketID string, entityName
 			// still remembers it. Skip it rather than failing the whole recall.
 			continue
 		}
-		if row.record.SessionID != bucketID || memoryExpired(row.record) || memorySuperseded(row.record) {
+		if row.record.SessionID != bucketID || memoryExpired(row.record) || memorySuperseded(row.record) || db.memoryUnreviewed(row.record) {
 			continue
 		}
 		// Normalised so a memory mentioning every named entity scores 1.

@@ -63,18 +63,26 @@ func pgAggregateWhere(req AggregationRequest, args *pgArgs) []string {
 		where = append(where, pgMetadataEquals(field, value, args))
 	}
 	if req.ExcludeDocuments != "" {
-		// The condition is written with ?; each becomes the next $n.
-		parts := strings.Split(req.ExcludeDocuments, "?")
-		var b strings.Builder
-		for i, part := range parts {
-			b.WriteString(part)
-			if i < len(parts)-1 {
-				b.WriteString(args.add(req.ExcludeDocumentsArgs[i]))
-			}
-		}
-		where = append(where, "(doc_id IS NULL OR doc_id NOT IN (SELECT id FROM documents WHERE "+b.String()+"))")
+		where = append(where, "(doc_id IS NULL OR doc_id NOT IN (SELECT id FROM documents WHERE "+pgBindEach(req.ExcludeDocuments, req.ExcludeDocumentsArgs, args)+"))")
+	}
+	if req.OnlyDocuments != "" {
+		where = append(where, "doc_id IN (SELECT id FROM documents WHERE "+pgBindEach(req.OnlyDocuments, req.OnlyDocumentsArgs, args)+")")
 	}
 	return where
+}
+
+// pgBindEach turns a condition written with ? into one with the next $n
+// for each of its arguments.
+func pgBindEach(condition string, values []interface{}, args *pgArgs) string {
+	parts := strings.Split(condition, "?")
+	var b strings.Builder
+	for i, part := range parts {
+		b.WriteString(part)
+		if i < len(parts)-1 {
+			b.WriteString(args.add(values[i]))
+		}
+	}
+	return b.String()
 }
 
 func (s *PostgresStore) aggregateCount(ctx context.Context, req AggregationRequest) (*AggregationResponse, error) {
