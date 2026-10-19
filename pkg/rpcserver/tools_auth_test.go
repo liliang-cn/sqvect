@@ -147,21 +147,32 @@ func TestAnUnknownToolNameIsDeniedRatherThanLeftToTheHandler(t *testing.T) {
 	}
 }
 
-func TestAConfinedKeyIsRefusedEveryToolCall(t *testing.T) {
-	// hermes is confined to its own user_id. Tool arguments are a JSON string,
-	// so the scope check cannot see the user_id inside them, and every tool —
-	// memory_search included — is reachable through this one RPC. Confinement
-	// must not lapse here of all places.
+func TestAConfinedKeyIsRefusedToolCallsItsScopeCannotCover(t *testing.T) {
+	// hermes is confined to its own user_id. Every tool is reachable through
+	// this one RPC, so confinement must not lapse here of all places: the
+	// arguments are checked against the user_id the tool declares. A tool that
+	// declares no user_id (knowledge_search is by collection) stays refused,
+	// and so does a call for another user; a call for hermes's own rows goes
+	// through. Passing a user_id to a tool that does not take one does not
+	// unlock it — the policy reads the schema, not the arguments alone.
 	conn := newPolicyConn(t, Options{Keys: hermesAndZeus(t)})
 	client := rpcv1.NewToolsServiceClient(conn)
+	call := func(name, args string) error {
+		_, err := client.CallTool(asKey("hermes-secret"), &rpcv1.CallToolRequest{Name: name, ArgsJson: args})
+		return err
+	}
 
-	for _, name := range []string{"memory_search", "knowledge_search", "memory_save"} {
-		_, err := client.CallTool(asKey("hermes-secret"), &rpcv1.CallToolRequest{
-			Name: name, ArgsJson: `{"query":"anything","user_id":"hermes"}`,
-		})
-		if status.Code(err) != codes.PermissionDenied {
-			t.Errorf("a confined key called %s: %v", name, err)
-		}
+	if err := call("knowledge_search", `{"query":"anything","user_id":"hermes"}`); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("a confined key called a tool that takes no user_id: %v", err)
+	}
+	if err := call("memory_search", `{"query":"anything","user_id":"zeus"}`); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("a confined key searched another user's memory: %v", err)
+	}
+	if err := call("memory_search", `{"query":"anything"}`); status.Code(err) != codes.PermissionDenied {
+		t.Errorf("a confined key searched every user's memory: %v", err)
+	}
+	if err := call("memory_search", `{"query":"anything","user_id":"hermes"}`); err != nil {
+		t.Errorf("a confined key could not search its own memory: %v", err)
 	}
 
 	// ListTools stays open to it: the catalogue is static and names no rows.

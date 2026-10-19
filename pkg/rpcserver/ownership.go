@@ -2,12 +2,15 @@ package rpcserver
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/authz"
 	"github.com/liliang-cn/cortexdb/v2/pkg/cortexdb"
+	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 )
 
 // Ownership is the second half of the scope model, and it lives here rather
@@ -85,10 +88,133 @@ var idAddressedMethods = map[string]struct{}{
 // that replaces it is strictly stronger — it compares against the row that
 // exists rather than against a field the caller filled in.
 func authorizeRequestRows(key authz.Key, fullMethod string, req any) error {
+	if err := authorizeTypedArgs(key, req); err != nil {
+		return err
+	}
 	if _, deferred := idAddressedMethods[fullMethod]; deferred {
 		return nil
 	}
+	if fullMethod == authz.CallToolMethod {
+		return authorizeToolArgs(key, req)
+	}
 	return key.AuthorizeRows(fullMethod, requestFieldLookup(req))
+}
+
+// authorizeToolArgs is the row check for CallTool. The request message carries
+// the tool's arguments as a string of JSON, which requestFieldLookup cannot see
+// into, so the arguments are parsed and checked against the allowlist line of
+// the named tool (authz.AuthorizeToolArgs). Unconfined keys skip all of it, as
+// they skip every row check.
+//
+// The gates a confined key needs (disable_memory for a key confined to a
+// collection on a recall, and the reverse) are forced into the request first,
+// so the handler calls the tool with exactly the arguments the policy checked.
+func authorizeToolArgs(key authz.Key, req any) error {
+	if key.Scope.IsZero() {
+		return nil
+	}
+	call, ok := req.(*rpcv1.CallToolRequest)
+	if !ok {
+		return key.AuthorizeRows(authz.CallToolMethod, nil)
+	}
+	args := key.ConfineToolArgs(call.GetName(), []byte(call.GetArgsJson()))
+	if err := key.AuthorizeToolArgs(call.GetName(), args); err != nil {
+		return err
+	}
+	call.ArgsJson = string(args)
+	return nil
+}
+
+// authorizeTypedArgs holds a typed write to the allowlist line of the tool
+// it stands for, so the typed RPC and CallTool cannot disagree on what a
+// confined key may send: declared entities and relations write the shared
+// graph, and some metadata keys are the engine's. Only the arguments the two
+// share are handed over; the scope fields and the row are checked as for any
+// typed RPC. A request that is none of these five passes untouched.
+//
+// Two differences from CallTool, both because of what the typed RPC is.
+// SaveKnowledge, UpdateKnowledge, SaveMemory and UpdateMemory are signed by
+// the facade (cortexdb.WithWriter replaces written_by and updated_by), so
+// those two keys are not handed over: a row read back and sent again is not
+// refused for the signature it carries. InsertGraphDocument is not signed and
+// keeps the refusal. And a memory write from a key that reaches no memory row
+// (one confined to a collection) is left to the row checks, which answer it
+// as main does: the interceptor refuses SaveMemory, and UpdateMemory is
+// NOT_FOUND like GetMemory and DeleteMemory.
+func authorizeTypedArgs(key authz.Key, req any) error {
+	if key.Scope.IsZero() {
+		return nil
+	}
+	var tool string
+	args := map[string]any{}
+	stringMap := func(m map[string]string) {
+		if len(m) == 0 {
+			return
+		}
+		meta := make(map[string]any, len(m))
+		for k, v := range m {
+			meta[k] = v
+		}
+		args["metadata"] = meta
+	}
+	signed := func(m map[string]any) map[string]any {
+		delete(m, "written_by")
+		delete(m, "updated_by")
+		return m
+	}
+	graph := func(entities []*rpcv1.ToolEntityInput, relations []*rpcv1.ToolRelationInput) {
+		if len(entities) > 0 {
+			args["entities"] = []any{}
+		}
+		if len(relations) > 0 {
+			args["relations"] = []any{}
+		}
+	}
+	switch r := req.(type) {
+	case *rpcv1.SaveKnowledgeRequest:
+		tool, args["collection"] = "knowledge_save", r.GetCollection()
+		stringMap(r.GetMetadata())
+		graph(r.GetEntities(), r.GetRelations())
+		if m, ok := args["metadata"].(map[string]any); ok {
+			signed(m)
+		}
+	case *rpcv1.UpdateKnowledgeRequest:
+		tool, args["collection"] = "knowledge_update", r.GetCollection()
+		stringMap(r.GetMetadata())
+		graph(r.GetEntities(), r.GetRelations())
+		if m, ok := args["metadata"].(map[string]any); ok {
+			signed(m)
+		}
+	case *rpcv1.InsertGraphDocumentRequest:
+		tool, args["collection"] = "ingest_document", r.GetCollection()
+		stringMap(r.GetMetadata())
+	case *rpcv1.SaveMemoryRequest:
+		if !key.Scope.Permits(authz.FieldCollection, "") {
+			return nil
+		}
+		tool = "memory_save"
+		for field, v := range map[string]string{authz.FieldUserID: r.GetUserId(), authz.FieldScope: r.GetScope(), authz.FieldNamespace: r.GetNamespace()} {
+			if v != "" {
+				args[field] = v
+			}
+		}
+		if m := r.GetMetadata().AsMap(); len(m) > 0 {
+			args["metadata"] = signed(m)
+		}
+	case *rpcv1.UpdateMemoryRequest:
+		if !key.Scope.Permits(authz.FieldCollection, "") {
+			return nil
+		}
+		tool = "memory_update"
+		if m := r.GetMetadata().AsMap(); len(m) > 0 {
+			args["metadata"] = signed(m)
+		}
+	default:
+		return nil
+	}
+	// Strings, and a Struct's own values: always JSON.
+	raw, _ := json.Marshal(args)
+	return key.AuthorizeToolArgs(tool, raw)
 }
 
 // withheld is the single answer a confined key gets for a row it may not have.
@@ -127,12 +253,10 @@ func withheld(kind, id string) error {
 // Ignoring an uncheckable constraint is how a scope quietly becomes wider than
 // it reads.
 func scopePermitsMemory(scope authz.Scope, record cortexdb.MemoryRecord) bool {
-	return scope.Permits(authz.FieldUserID, record.UserID) &&
-		scope.Permits(authz.FieldScope, record.Scope) &&
-		scope.Permits(authz.FieldNamespace, record.Namespace) &&
-		// Memories carry no collection, so a collection-confined key has
-		// nothing to match and is refused.
-		scope.Permits(authz.FieldCollection, "")
+	// Memories carry no collection, so a collection-confined key has nothing
+	// to match and is refused. The rule lives in authz so the toolbox guard
+	// (authz.Scope.GuardToolRows) and this one cannot disagree.
+	return scope.PermitsMemory(record.UserID, record.Scope, record.Namespace)
 }
 
 // scopePermitsKnowledge is scopePermitsMemory for knowledge documents, which
@@ -146,11 +270,61 @@ func scopePermitsMemory(scope authz.Scope, record cortexdb.MemoryRecord) bool {
 // empty string passed in for a field the row's kind does not have at all. Both
 // are refusals because they are not matches, not because a branch remembered
 // to refuse them.
+//
+// A document whose chunks are gone has no collection the facade can read
+// (it names the default one), so no confined key may have it, as the tool
+// guard decides (authz.Scope.GuardToolRows).
 func scopePermitsKnowledge(scope authz.Scope, record cortexdb.KnowledgeRecord) bool {
-	return scope.Permits(authz.FieldCollection, record.Collection) &&
-		scope.Permits(authz.FieldUserID, "") &&
-		scope.Permits(authz.FieldScope, "") &&
-		scope.Permits(authz.FieldNamespace, "")
+	return len(record.ChunkIDs) > 0 && scope.PermitsKnowledge(record.Collection)
+}
+
+// guardToolRows is the row check for CallTool: a tool that names a row by id
+// may only touch a row within the caller's scope. The arguments were checked
+// by the interceptor (authorizeToolArgs); the row is checked here, where the
+// database is at hand, the way every id-addressed typed RPC checks its row.
+// A row the key may not have is NOT_FOUND, same as a row that does not exist.
+func guardToolRows(ctx context.Context, db *cortexdb.DB, tool, args string) error {
+	scope, confined := confinedCaller(ctx)
+	if !confined {
+		return nil
+	}
+	err := scope.GuardToolRows(ctx, db, tool, []byte(args))
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, authz.ErrWithheld):
+		return status.Error(codes.NotFound, err.Error())
+	case errors.Is(err, authz.ErrDenied):
+		return status.Error(codes.PermissionDenied, err.Error())
+	default:
+		return toStatus(err)
+	}
+}
+
+// oneNotFound spells every NOT_FOUND a tool returns to a confined caller the
+// way guardToolRows spells a row the caller may not have: "not found" and
+// nothing else. The tool's own wording names the kind of row, or the store
+// that missed it ("embedding not found"), and a confined caller that could
+// read it would tell a row that does not exist from a row it may not have:
+// the oracle the guard exists to close. An unconfined caller keeps the
+// tool's wording, which is its diagnostic.
+func oneNotFound(ctx context.Context, st error) error {
+	if _, confined := confinedCaller(ctx); confined && status.Code(st) == codes.NotFound {
+		return status.Error(codes.NotFound, authz.ErrWithheld.Error())
+	}
+	return st
+}
+
+// withheldIfMissing is oneNotFound for a typed RPC: a NOT_FOUND the facade
+// returns to a confined caller is spelled as withheld spells a row the caller
+// may not have, id included. UpdateKnowledge needs it because its guard lets a
+// missing id through (guardKnowledgeUpsert), and the facade's own wording
+// names the store that missed it ("embedding not found").
+func withheldIfMissing(ctx context.Context, kind, id string, st error) error {
+	if _, confined := confinedCaller(ctx); confined && status.Code(st) == codes.NotFound {
+		return withheld(kind, id)
+	}
+	return st
 }
 
 // guardMemory is the pre-flight for every id-addressed memory RPC. It reports

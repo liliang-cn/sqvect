@@ -87,7 +87,7 @@ func (s *knowledgeService) UpdateKnowledge(ctx context.Context, req *rpcv1.Updat
 	}
 	resp, err := s.db.UpdateKnowledge(ctx, in)
 	if err != nil {
-		return nil, toStatus(err)
+		return nil, withheldIfMissing(ctx, "knowledge", req.GetKnowledgeId(), toStatus(err))
 	}
 	return saveResponseToProto(resp), nil
 }

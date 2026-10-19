@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc"
@@ -278,9 +279,91 @@ func TestAKeyFileOnDiskDrivesTheRunningServer(t *testing.T) {
 	}
 }
 
+// The MCP shared-brain client proxies every tool call through CallTool. Until
+// the arguments could be checked, a confined key was refused every tool and so
+// could not use the shared brain at all. Now the arguments are checked against
+// the scope fields the named tool declares: hermes reads and writes its own
+// memory through the tools, is refused another user's, is refused a call that
+// leaves user_id unset, and is refused a tool off the allowlist.
+func TestAConfinedKeyMayCallToolsWithinItsScope(t *testing.T) {
+	conn := newPolicyConn(t, Options{Keys: hermesAndZeus(t)})
+	tools := rpcv1.NewToolsServiceClient(conn)
+	call := func(secret, tool, args string) error {
+		_, err := tools.CallTool(asKey(secret), &rpcv1.CallToolRequest{Name: tool, ArgsJson: args})
+		return err
+	}
+
+	if err := call("hermes-secret", "memory_save",
+		`{"memory_id":"h1","content":"hermes deploys on Fridays","user_id":"hermes","scope":"user"}`); err != nil {
+		t.Fatalf("hermes could not save its own memory through the tools: %v", err)
+	}
+	if err := call("hermes-secret", "memory_search", `{"query":"deploys","user_id":"hermes"}`); err != nil {
+		t.Fatalf("hermes could not search its own memory through the tools: %v", err)
+	}
+
+	for name, c := range map[string]struct{ tool, args, want string }{
+		"another user":        {"memory_search", `{"query":"deploys","user_id":"zeus"}`, `asks for "zeus"`},
+		"user unset":          {"memory_search", `{"query":"deploys"}`, "leaves user_id unset"},
+		"tool without a user": {"graph_statistics", `{}`, "not a tool a confined key may call"},
+		"nested disagreement": {"knowledge_memory_recall", `{"query":"q","user_id":"hermes","plan":{"filters":{"user_id":"zeus"}}}`, "nested user_id"},
+	} {
+		err := call("hermes-secret", c.tool, c.args)
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%s: a confined key got through CallTool: %v", name, err)
+		}
+		if msg := status.Convert(err).Message(); !strings.Contains(msg, c.want) {
+			t.Fatalf("%s: denial %q should say %q", name, msg, c.want)
+		}
+	}
+
+	// Arguments that are not a JSON object cannot be checked: denied, not served.
+	if err := call("hermes-secret", "memory_search", `[1,2,3]`); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("non-object arguments were served to a confined key: %v", err)
+	}
+
+	// The operator's unconfined key is unaffected.
+	if err := call("op-secret", "graph_statistics", `{}`); err != nil {
+		t.Fatalf("operator graph_statistics: %v", err)
+	}
+}
+
+func TestAKeyConfinedToACollectionMayIngestAndSearchItThroughTheTools(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{
+		{ID: "notes", Secret: "notes-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{Collection: "notes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := newPolicyConn(t, Options{Keys: ks})
+	tools := rpcv1.NewToolsServiceClient(conn)
+	call := func(tool, args string) error {
+		_, err := tools.CallTool(asKey("notes-secret"), &rpcv1.CallToolRequest{Name: tool, ArgsJson: args})
+		return err
+	}
+
+	if err := call("ingest_document",
+		`{"document_id":"n1","content":"A note about the ledger migration.","collection":"notes"}`); err != nil {
+		t.Fatalf("ingest into the permitted collection: %v", err)
+	}
+	if err := call("knowledge_search", `{"query":"ledger","collection":"notes","top_k":3}`); err != nil {
+		t.Fatalf("search the permitted collection: %v", err)
+	}
+	if err := call("ingest_document",
+		`{"document_id":"n2","content":"Not yours.","collection":"secrets"}`); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ingested into another collection: %v", err)
+	}
+	if err := call("knowledge_search", `{"query":"ledger","top_k":3}`); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("searched every collection: %v", err)
+	}
+	if err := call("delete_document_graph", `{"document_id":"n1"}`); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("a tool that takes no collection was served to a collection-confined key: %v", err)
+	}
+}
+
 // One key, several collections: the shared-brain shape where an agent reads
-// its team's knowledge and its own. Each listed collection is reachable, and
-// one outside the list is refused like any other.
+// its team's knowledge and its own. Both ports apply the same scope, so the
+// typed RPC and the tool call agree on what is in and what is out.
 func TestAKeyConfinedToSeveralCollectionsReachesEachOfThem(t *testing.T) {
 	ks, err := authz.NewKeySet([]authz.Key{
 		{ID: "lf", Secret: "lf-secret", Clearance: authz.ReadWrite,
@@ -291,6 +374,7 @@ func TestAKeyConfinedToSeveralCollectionsReachesEachOfThem(t *testing.T) {
 	}
 	conn := newPolicyConn(t, Options{Keys: ks})
 	knowledge := rpcv1.NewKnowledgeServiceClient(conn)
+	tools := rpcv1.NewToolsServiceClient(conn)
 
 	for _, c := range []string{"team-acme", "user-lf"} {
 		if _, err := knowledge.SaveKnowledge(asKey("lf-secret"), &rpcv1.SaveKnowledgeRequest{
@@ -298,10 +382,10 @@ func TestAKeyConfinedToSeveralCollectionsReachesEachOfThem(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("save into %s: %v", c, err)
 		}
-		if _, err := knowledge.SearchKnowledge(asKey("lf-secret"), &rpcv1.SearchKnowledgeRequest{
-			Query: "kept", Collection: c, TopK: 3,
+		if _, err := tools.CallTool(asKey("lf-secret"), &rpcv1.CallToolRequest{
+			Name: "knowledge_search", ArgsJson: `{"query":"kept","collection":"` + c + `","top_k":3}`,
 		}); err != nil {
-			t.Fatalf("search in %s: %v", c, err)
+			t.Fatalf("tool search in %s: %v", c, err)
 		}
 	}
 	_, err = knowledge.SearchKnowledge(asKey("lf-secret"), &rpcv1.SearchKnowledgeRequest{
@@ -310,9 +394,66 @@ func TestAKeyConfinedToSeveralCollectionsReachesEachOfThem(t *testing.T) {
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("searched a collection outside the list: %v", err)
 	}
-	// A row in a collection outside the list is withheld by id as well.
-	if _, err := knowledge.GetKnowledge(asKey("lf-secret"), &rpcv1.GetKnowledgeRequest{KnowledgeId: "k-team-acme"}); err != nil {
-		t.Fatalf("own row by id: %v", err)
+	_, err = tools.CallTool(asKey("lf-secret"), &rpcv1.CallToolRequest{
+		Name: "knowledge_search", ArgsJson: `{"query":"kept","collection":"secrets"}`,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("tool searched a collection outside the list: %v", err)
+	}
+}
+
+// The argument check lets a confined key name its own collection; the row
+// check keeps it from naming another collection's row with it. Found by the
+// end-to-end trial: lf passed collection=team-acme and the id of a document
+// in secrets, and the document was overwritten and moved.
+func TestAConfinedKeyCannotReachAnotherRowByIDThroughTheTools(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{
+		{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite},
+		{ID: "lf", Secret: "lf-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{Collections: []string{"team-acme", "user-lf"}}},
+		{ID: "hermes", Secret: "hermes-secret", Clearance: authz.ReadWrite,
+			Scope: authz.Scope{UserID: "hermes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := newPolicyConn(t, Options{Keys: ks})
+	tools := rpcv1.NewToolsServiceClient(conn)
+	call := func(secret, tool, args string) error {
+		_, err := tools.CallTool(asKey(secret), &rpcv1.CallToolRequest{Name: tool, ArgsJson: args})
+		return err
+	}
+	must := func(what string, err error) {
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	must("operator writes secret-doc", call("op-secret", "knowledge_save", `{"knowledge_id":"secret-doc","content":"The secret retainer.","collection":"secrets"}`))
+	must("operator writes zeus-1", call("op-secret", "memory_save", `{"memory_id":"zeus-1","content":"Zeus private.","user_id":"zeus","scope":"user"}`))
+	must("lf writes its own", call("lf-secret", "knowledge_save", `{"knowledge_id":"acme-1","content":"Acme spec.","collection":"team-acme"}`))
+
+	for name, c := range map[string]struct{ tool, args string }{
+		"knowledge_update": {"knowledge_update", `{"knowledge_id":"secret-doc","collection":"team-acme","content":"overwritten"}`},
+		"knowledge_save":   {"knowledge_save", `{"knowledge_id":"secret-doc","collection":"team-acme","content":"overwritten"}`},
+		"ingest_document":  {"ingest_document", `{"document_id":"secret-doc","collection":"team-acme","content":"overwritten"}`},
+	} {
+		if err := call("lf-secret", c.tool, c.args); status.Code(err) != codes.NotFound {
+			t.Errorf("%s: lf reached another collection's row: %v", name, err)
+		}
+	}
+	if err := call("hermes-secret", "memory_save", `{"memory_id":"zeus-1","content":"overwritten","user_id":"hermes","scope":"user"}`); status.Code(err) != codes.NotFound {
+		t.Errorf("hermes reached zeus's memory: %v", err)
+	}
+	// Own rows, by id, still work: update and re-ingest within the scope.
+	must("lf updates its own", call("lf-secret", "knowledge_update", `{"knowledge_id":"acme-1","collection":"team-acme","content":"Acme spec v2."}`))
+	must("hermes saves its own", call("hermes-secret", "memory_save", `{"memory_id":"h-1","content":"mine","user_id":"hermes","scope":"user"}`))
+
+	// Nothing moved: the operator reads the rows as written.
+	knowledge := rpcv1.NewKnowledgeServiceClient(conn)
+	got, err := knowledge.GetKnowledge(asKey("op-secret"), &rpcv1.GetKnowledgeRequest{KnowledgeId: "secret-doc"})
+	must("operator reads secret-doc", err)
+	if got.GetKnowledge().GetCollection() != "secrets" || !strings.Contains(got.GetKnowledge().GetContent(), "retainer") {
+		t.Fatalf("secret-doc was changed: %v", got.GetKnowledge())
 	}
 }
 

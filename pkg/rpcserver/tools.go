@@ -39,12 +39,15 @@ func (s *toolsService) CallTool(ctx context.Context, req *rpcv1.CallToolRequest)
 	if args == "" {
 		args = "{}"
 	}
+	if err := guardToolRows(ctx, s.db, req.GetName(), args); err != nil {
+		return nil, err
+	}
 	result, err := s.db.GraphRAGTools().Call(ctx, req.GetName(), json.RawMessage(args))
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unknown tool") {
 			return nil, status.Error(codes.NotFound, err.Error())
 		}
-		return nil, toStatus(err)
+		return nil, oneNotFound(ctx, toStatus(err))
 	}
 	payload, err := json.Marshal(result)
 	if err != nil {
