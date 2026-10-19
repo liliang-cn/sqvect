@@ -70,10 +70,12 @@ func (db *DB) RangeSearchVector(ctx context.Context, vector []float32, opts Vect
 		return nil, fmt.Errorf("%w, got %v", ErrNonPositiveRadius, opts.Radius)
 	}
 
-	results, err := db.store.RangeSearch(ctx, vector, opts.Radius, core.SearchOptions{
-		Collection: opts.Collection,
-		Filter:     opts.Filter,
-		TopK:       opts.MaxResults,
+	results, err := db.gatedSearch(ctx, opts.MaxResults, func(k int) ([]core.ScoredEmbedding, error) {
+		return db.store.RangeSearch(ctx, vector, opts.Radius, core.SearchOptions{
+			Collection: opts.Collection,
+			Filter:     opts.Filter,
+			TopK:       k,
+		})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("range search: %w", err)
@@ -152,7 +154,9 @@ func (t *GraphRAGToolbox) SearchVectorRange(ctx context.Context, req ToolSearchV
 	if err != nil {
 		return nil, err
 	}
-
+	// RangeSearchText has applied the gate, a chunk of an expired document
+	// is not within any radius, and counted only visible rows toward the
+	// cap, so truncated speaks of rows the caller may see.
 	truncated := len(results) > limit
 	if truncated {
 		results = results[:limit]

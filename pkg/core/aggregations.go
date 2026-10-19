@@ -29,8 +29,14 @@ type AggregationRequest struct {
 	Filters    map[string]interface{} `json:"filters"`    // Optional filters
 	Collection string                 `json:"collection"` // Optional collection filter
 	Having     map[string]interface{} `json:"having"`     // Post-aggregation filters
-	OrderBy    string                 `json:"order_by"`   // Field to order results by
-	Limit      int                    `json:"limit"`      // Max results
+	// ExcludeDocuments leaves out the rows of the documents this condition
+	// on the documents table selects, with one ? per ExcludeDocumentsArgs;
+	// rows that belong to no document are never excluded by it. It is SQL,
+	// so it is set by the facade and never read from a request's JSON.
+	ExcludeDocuments     string        `json:"-"`
+	ExcludeDocumentsArgs []interface{} `json:"-"`
+	OrderBy              string        `json:"order_by"` // Field to order results by
+	Limit                int           `json:"limit"`    // Max results
 }
 
 // AggregationResult represents a single aggregation result
@@ -89,7 +95,7 @@ func (s *SQLiteStore) aggregateCount(ctx context.Context, req AggregationRequest
 	}
 
 	// Add metadata filters
-	query, args = addMetadataFilters(query, args, req.Filters)
+	query, args = addAggregateFilters(query, args, req)
 
 	var count int
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&count)
@@ -130,7 +136,7 @@ func (s *SQLiteStore) aggregateSum(ctx context.Context, req AggregationRequest) 
 	}
 
 	// Add metadata filters
-	query, args = addMetadataFilters(query, args, req.Filters)
+	query, args = addAggregateFilters(query, args, req)
 
 	var sumValue sql.NullFloat64
 	var count int
@@ -176,7 +182,7 @@ func (s *SQLiteStore) aggregateAvg(ctx context.Context, req AggregationRequest) 
 	}
 
 	// Add metadata filters
-	query, args = addMetadataFilters(query, args, req.Filters)
+	query, args = addAggregateFilters(query, args, req)
 
 	var avgValue sql.NullFloat64
 	var count int
@@ -227,7 +233,7 @@ func (s *SQLiteStore) aggregateMinMax(ctx context.Context, req AggregationReques
 	}
 
 	// Add metadata filters
-	query, args = addMetadataFilters(query, args, req.Filters)
+	query, args = addAggregateFilters(query, args, req)
 
 	var value sql.NullFloat64
 	var count int
@@ -302,7 +308,7 @@ func (s *SQLiteStore) aggregateGroupBy(ctx context.Context, req AggregationReque
 	}
 
 	// Add metadata filters
-	query, args = addMetadataFilters(query, args, req.Filters)
+	query, args = addAggregateFilters(query, args, req)
 
 	// Add GROUP BY clause
 	query += fmt.Sprintf(" GROUP BY %s", joinStrings(groupByClauses, ", "))
@@ -495,6 +501,25 @@ func validateAggregationRequest(req AggregationRequest) error {
 }
 
 // addMetadataFilters adds metadata filters to the query
+// addAggregateFilters adds the request's metadata filters and its document
+// exclusion to a query on embeddings.
+func addAggregateFilters(query string, args []interface{}, req AggregationRequest) (string, []interface{}) {
+	query, args = addMetadataFilters(query, args, req.Filters)
+	return excludeDocuments(query, args, req.ExcludeDocuments, req.ExcludeDocumentsArgs)
+}
+
+// excludeDocuments adds "the row belongs to none of the documents where
+// holds" to a query on embeddings, as one subquery whatever the number of
+// documents. A row with no document is kept: NULL NOT IN (...) is not true
+// in SQL, so the test is spelled out.
+func excludeDocuments(query string, args []interface{}, where string, whereArgs []interface{}) (string, []interface{}) {
+	if where == "" {
+		return query, args
+	}
+	query += " AND (doc_id IS NULL OR doc_id NOT IN (SELECT id FROM documents WHERE " + where + "))"
+	return query, append(args, whereArgs...)
+}
+
 func addMetadataFilters(query string, args []interface{}, filters map[string]interface{}) (string, []interface{}) {
 	for field, value := range filters {
 		query += fmt.Sprintf(" AND json_extract(metadata, '$.%s') = ?", field)

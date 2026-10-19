@@ -444,7 +444,7 @@ func TestAKnowledgeSaveOverAnExistingIdRetiresWhatTheOldTextLeft(t *testing.T) {
 // every document under the write lock.
 func TestTheDedupeLookupUsesTheContentHashIndex(t *testing.T) {
 	db, _, ctx := openIngestBrain(t, "hash-index")
-	rows, err := db.SQL().QueryContext(ctx, `EXPLAIN QUERY PLAN `+db.contentHolderQuery(), "hash", "id", "collection")
+	rows, err := db.SQL().QueryContext(ctx, `EXPLAIN QUERY PLAN `+db.contentHolderQuery(), "hash", "id", "collection", "2031-01-01T00:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}

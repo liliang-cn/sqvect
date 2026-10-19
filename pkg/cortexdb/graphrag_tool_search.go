@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -126,7 +128,10 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 	if len(ordered) > searchOpts.TopK {
 		ordered = ordered[:searchOpts.TopK]
 	}
-	return filterScoredEmbeddings(ordered, resolution.Plan.Filters), nil
+	// SearchTextOnly has applied the document gate to each phrasing, with
+	// its budget refilled; the plan's filters (document_ids) apply here, as
+	// on main.
+	return t.db.filterScoredEmbeddings(ctx, ordered, resolution.Plan.Filters), nil
 }
 
 // SearchChunksByEntities finds chunks that are linked to the requested entities.
@@ -239,15 +244,137 @@ func (t *GraphRAGToolbox) ExpandGraph(ctx context.Context, req ToolExpandGraphRe
 	if err != nil {
 		return nil, err
 	}
-	return &ToolExpandGraphResponse{Nodes: subgraph.Nodes, Edges: subgraph.Edges, Scores: scores}, nil
+	nodes, edges := t.db.withoutExpiredDocuments(ctx, subgraph.Nodes, subgraph.Edges, scores)
+	return &ToolExpandGraphResponse{Nodes: nodes, Edges: edges, Scores: scores}, nil
 }
 
-// GetNodes fetches graph nodes by ID.
+// withoutExpiredDocuments drops from a subgraph the document and chunk nodes
+// of an expired document, the edges that touch them and their scores: the
+// graph is the one place a search could otherwise still reach an expired
+// passage, through the entities it mentions.
+func (db *DB) withoutExpiredDocuments(ctx context.Context, nodes []*graph.GraphNode, edges []*graph.GraphEdge, scores map[string]float64) ([]*graph.GraphNode, []*graph.GraphEdge) {
+	docIDs := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if docID, _ := node.Properties["document_id"].(string); node.NodeType == "chunk" || node.NodeType == "document" {
+			docIDs = append(docIDs, docID)
+		}
+	}
+	hidden := db.hiddenAmong(ctx, docIDs)
+	dropped := map[string]struct{}{}
+	keptNodes := make([]*graph.GraphNode, 0, len(nodes))
+	for _, node := range nodes {
+		docID, _ := node.Properties["document_id"].(string)
+		if (node.NodeType == "chunk" || node.NodeType == "document") && !allowDocument(nil, hidden, docID) {
+			dropped[node.ID] = struct{}{}
+			delete(scores, node.ID)
+			continue
+		}
+		keptNodes = append(keptNodes, node)
+	}
+	if len(dropped) == 0 {
+		return nodes, db.withoutExpiredProvenance(ctx, edges)
+	}
+	keptEdges := make([]*graph.GraphEdge, 0, len(edges))
+	for _, edge := range edges {
+		if _, gone := dropped[edge.FromNodeID]; gone {
+			continue
+		}
+		if _, gone := dropped[edge.ToNodeID]; gone {
+			continue
+		}
+		keptEdges = append(keptEdges, edge)
+	}
+	return keptNodes, db.withoutExpiredProvenance(ctx, keptEdges)
+}
+
+// withoutExpiredProvenance takes out of each edge's provenance (chunk_ids,
+// source_chunk_id, document_id) the chunks and the document of an expired
+// document, so an edge does not name what the search hides. An edge that a
+// live document also backs, or that names no provenance, stays: a fact
+// between two entities has no expiry of its own. An edge that only expired
+// documents back is left out, since its id can name the document
+// (upsert_relations with a document_id). An edge it changes is a copy: the
+// graph's own edges are left as they are.
+func (db *DB) withoutExpiredProvenance(ctx context.Context, edges []*graph.GraphEdge) []*graph.GraphEdge {
+	var chunkIDs, docIDs []string
+	for _, edge := range edges {
+		if edge.Properties == nil {
+			continue
+		}
+		chunkIDs = append(chunkIDs, stringsFromAny(edge.Properties["chunk_ids"])...)
+		if src, _ := edge.Properties["source_chunk_id"].(string); src != "" {
+			chunkIDs = append(chunkIDs, src)
+		}
+		if doc, _ := edge.Properties["document_id"].(string); doc != "" {
+			docIDs = append(docIDs, doc)
+		}
+	}
+	if len(chunkIDs) == 0 && len(docIDs) == 0 {
+		return edges
+	}
+	docOf := map[string]string{}
+	if len(chunkIDs) > 0 {
+		chunks, err := db.graph.GetNodesBatch(ctx, chunkIDs)
+		if err != nil {
+			return edges
+		}
+		for _, chunk := range chunks {
+			doc, _ := chunk.Properties["document_id"].(string)
+			docOf[chunk.ID] = doc
+			docIDs = append(docIDs, doc)
+		}
+	}
+	hidden := db.hiddenAmong(ctx, docIDs)
+	if len(hidden) == 0 {
+		return edges
+	}
+	hiddenChunk := func(id string) bool {
+		_, gone := hidden[docOf[id]]
+		return gone
+	}
+	out := make([]*graph.GraphEdge, 0, len(edges))
+	for _, edge := range edges {
+		if edge.Properties == nil {
+			out = append(out, edge)
+			continue
+		}
+		chunks := stringsFromAny(edge.Properties["chunk_ids"])
+		kept := slices.DeleteFunc(slices.Clone(chunks), hiddenChunk)
+		src, _ := edge.Properties["source_chunk_id"].(string)
+		doc, _ := edge.Properties["document_id"].(string)
+		_, docGone := hidden[doc]
+		srcGone := src != "" && hiddenChunk(src)
+		if len(kept) == 0 && (src == "" || srcGone) && (doc == "" || docGone) && (len(chunks) > 0 || src != "" || doc != "") {
+			continue
+		}
+		if len(kept) == len(chunks) && !srcGone && !docGone {
+			out = append(out, edge)
+			continue
+		}
+		copied := *edge
+		copied.Properties = maps.Clone(edge.Properties)
+		if len(kept) != len(chunks) {
+			copied.Properties["chunk_ids"] = kept
+		}
+		if srcGone {
+			delete(copied.Properties, "source_chunk_id")
+		}
+		if docGone {
+			delete(copied.Properties, "document_id")
+		}
+		out = append(out, &copied)
+	}
+	return out
+}
+
+// GetNodes fetches graph nodes by ID. The chunk and document nodes of an
+// expired document are left out, as get_chunks leaves its chunks out.
 func (t *GraphRAGToolbox) GetNodes(ctx context.Context, req ToolGetNodesRequest) (*ToolGetNodesResponse, error) {
 	nodes, err := t.db.graph.GetNodesBatch(ctx, req.NodeIDs)
 	if err != nil {
 		return nil, err
 	}
+	nodes, _ = t.db.withoutExpiredDocuments(ctx, nodes, nil, nil)
 	return &ToolGetNodesResponse{Nodes: nodes}, nil
 }
 

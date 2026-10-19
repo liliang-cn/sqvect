@@ -60,6 +60,12 @@ type ToolIngestDocumentRequest struct {
 	// exact content, nothing is written and the response names it in
 	// DuplicateOf.
 	Dedupe bool `json:"dedupe,omitempty"`
+	// ExpiresAt is an RFC 3339 instant after which the document is left out
+	// of every search and removed by the expiry sweep. Empty removes the
+	// expiry; absent keeps the one stored, so a re-ingest from the source
+	// does not lift a retention rule. A metadata key named expires_at is the
+	// caller's and is not read.
+	ExpiresAt *string `json:"expires_at,omitempty"`
 }
 
 // ToolIngestDocumentResponse summarizes lexical ingestion output.

@@ -198,6 +198,13 @@ func main() {
 		return
 	}
 
+	// `--sweep-expired [--dry-run] [--json]` removes the documents and memories
+	// whose expires_at has passed. Searches already leave them out; the sweep
+	// is what makes the retention rule true on disk.
+	if len(os.Args) > 1 && os.Args[1] == "--sweep-expired" {
+		os.Exit(sweepExpiredCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	// `--recall-eval <golden.jsonl>` measures recall quality against a golden
 	// set of real queries, so retrieval changes are judged by a fixed yardstick.
 	if len(os.Args) > 1 && os.Args[1] == "--recall-eval" {

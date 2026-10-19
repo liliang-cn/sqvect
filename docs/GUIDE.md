@@ -431,7 +431,25 @@ tools := db.GraphRAGTools()                             // in-process tool calli
 server := db.NewMCPServer(cortexdb.MCPServerOptions{})  // MCP server
 ```
 
-Tool groups (80+ tools, same names in-process and over MCP): GraphRAG (`ingest_document`, `search_text`, `build_context`, `expand_graph`, `search_paths`, `find_nodes`, `delete_document_graph`), unified retrieval (`cortex_query`), knowledge/memory (`knowledge_save`, `memory_search`, …), KnowledgeMemory (`knowledge_memory_recall`, `_reflect`, `_consolidate`, `extract_conversation`), KG (`knowledge_graph_query`, `_shacl_validate`, `apply_inference`), ontology (`ontology_save`, `ontology_action_apply`, `object_set_resolve`), and maintenance (`vector_dimension_repair`). The MCP server adds `render_graph_html`, an interactive knowledge-graph view. `memoryflow`/`graphflow`/`importflow`/`connector` expose their own toolboxes too.
+Tool groups (80+ tools, same names in-process and over MCP): GraphRAG (`ingest_document`, `search_text`, `build_context`, `expand_graph`, `search_paths`, `find_nodes`, `delete_document_graph`), unified retrieval (`cortex_query`), knowledge/memory (`knowledge_save`, `memory_search`, …), KnowledgeMemory (`knowledge_memory_recall`, `_reflect`, `_consolidate`, `extract_conversation`), KG (`knowledge_graph_query`, `_shacl_validate`, `apply_inference`), ontology (`ontology_save`, `ontology_action_apply`, `object_set_resolve`), and maintenance (`vector_dimension_repair`, `sweep_expired`). The MCP server adds `render_graph_html`, an interactive knowledge-graph view. `memoryflow`/`graphflow`/`importflow`/`connector` expose their own toolboxes too.
+
+### Expiry and the sweep
+
+`ingest_document`, `knowledge_save` and `knowledge_update` take `expires_at`, an
+RFC 3339 instant. Past it, the document is left out of every search, every chunk
+tool, the graph walks and the aggregates; it stays readable by id
+(`knowledge_get`). Absent, the field keeps the stored expiry, so a sync job that
+re-ingests from the source does not lift a retention rule; empty, it removes it.
+The engine keeps it under its own metadata key, `_expires_at`; a metadata key
+named `expires_at` is yours and is never read.
+
+Memories expire through `ttl_seconds`, as before. Nothing removed expired rows
+until now: `sweep_expired` (tool), `DB.SweepExpired` (library) and
+`cortexdb-mcp-stdio --sweep-expired [--dry-run] [--json]` delete every expired
+document (record, chunks, graph nodes) and every expired memory, each checked
+again just before its delete, so a row renewed after the listing is kept. With
+`CORTEXDB_REMOTE` set, the command sweeps the shared brain through the tool.
+`sweep_expired` is a write tool: any read-write key can run it.
 
 ## Claude Code and Codex plugin
 

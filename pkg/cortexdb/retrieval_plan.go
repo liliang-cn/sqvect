@@ -1,6 +1,7 @@
 package cortexdb
 
 import (
+	"context"
 	"strings"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
@@ -260,29 +261,49 @@ func applyRetrievalPlanCollection(collection string, filters *RetrievalFilters) 
 	return strings.TrimSpace(filters.Collection)
 }
 
-func filterScoredEmbeddings(results []core.ScoredEmbedding, filters *RetrievalFilters) []core.ScoredEmbedding {
-	if len(results) == 0 || filters == nil || len(filters.DocumentIDs) == 0 {
-		return results
+// filterScoredEmbeddings keeps the hits whose document the filters allow and
+// that has not expired. It is the vector path's counterpart of the check the
+// lexical and graph paths make per chunk: before it asked allowDocument, a
+// hybrid search seeded from the vector index returned an expired document
+// that the same search in lexical mode left out.
+func (db *DB) filterScoredEmbeddings(ctx context.Context, results []core.ScoredEmbedding, filters *RetrievalFilters) []core.ScoredEmbedding {
+	ids := make([]string, 0, len(results))
+	for _, result := range results {
+		ids = append(ids, result.DocID)
 	}
-
-	allowed := make(map[string]struct{}, len(filters.DocumentIDs))
-	for _, documentID := range filters.DocumentIDs {
-		if documentID == "" {
-			continue
-		}
-		allowed[documentID] = struct{}{}
-	}
-	if len(allowed) == 0 {
-		return results
-	}
-
+	hidden := db.hiddenAmong(ctx, ids)
 	filtered := make([]core.ScoredEmbedding, 0, len(results))
 	for _, result := range results {
-		if _, ok := allowed[result.DocID]; ok {
+		if allowDocument(filters, hidden, result.DocID) {
 			filtered = append(filtered, result)
 		}
 	}
 	return filtered
+}
+
+// gatedSearch asks search for k hits, keeps those the document gate allows,
+// and asks again for four times as many while hidden
+// hits took places the caller asked for and the store had more to give. A
+// hidden row never takes the place of a visible one, and the answer stops
+// where the store's own does. topK <= 0 asks once with the store's default.
+// A caller's own filters run after it, on what it kept, as on main: they do
+// not make it read further.
+func (db *DB) gatedSearch(ctx context.Context, topK int, search func(k int) ([]core.ScoredEmbedding, error)) ([]core.ScoredEmbedding, error) {
+	k := topK
+	for {
+		raw, err := search(k)
+		if err != nil {
+			return nil, err
+		}
+		kept := db.filterScoredEmbeddings(ctx, raw, nil)
+		if topK <= 0 || len(kept) >= topK || len(raw) < k {
+			if topK > 0 && len(kept) > topK {
+				kept = kept[:topK]
+			}
+			return kept, nil
+		}
+		k *= 4
+	}
 }
 
 func allowDocumentID(filters *RetrievalFilters, documentID string) bool {

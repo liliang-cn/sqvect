@@ -186,13 +186,10 @@ func (db *DB) SearchTextInCollection(ctx context.Context, collection string, que
 		return nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
-	opts := core.SearchOptions{
-		Collection: collection,
-		TopK:       topK,
-		QueryText:  query,
-	}
 	defer observability.Time(ctx, "vector")()
-	return db.store.Search(ctx, vec, opts)
+	return db.gatedSearch(ctx, topK, func(k int) ([]core.ScoredEmbedding, error) {
+		return db.store.Search(ctx, vec, core.SearchOptions{Collection: collection, TopK: k, QueryText: query})
+	})
 }
 
 // HybridSearchText performs hybrid search combining vector and keyword matching.
@@ -200,19 +197,18 @@ func (db *DB) HybridSearchText(ctx context.Context, query string, topK int) ([]c
 	if query == "" {
 		return nil, ErrEmptyText
 	}
-	if db.embedder == nil {
-		return db.store.HybridSearch(ctx, nil, query, core.HybridSearchOptions{
-			SearchOptions: core.SearchOptions{TopK: topK},
+	var vec []float32
+	if db.embedder != nil {
+		embedded, err := db.embedder.Embed(ctx, query)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
+		}
+		vec = embedded
+	}
+	return db.gatedSearch(ctx, topK, func(k int) ([]core.ScoredEmbedding, error) {
+		return db.store.HybridSearch(ctx, vec, query, core.HybridSearchOptions{
+			SearchOptions: core.SearchOptions{TopK: k},
 		})
-	}
-
-	vec, err := db.embedder.Embed(ctx, query)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
-	}
-
-	return db.store.HybridSearch(ctx, vec, query, core.HybridSearchOptions{
-		SearchOptions: core.SearchOptions{TopK: topK},
 	})
 }
 
@@ -321,6 +317,16 @@ func (db *DB) SearchTextOnly(ctx context.Context, query string, opts TextSearchO
 		return out, nil
 	}
 
+	return db.gatedSearch(ctx, opts.TopK, func(k int) ([]core.ScoredEmbedding, error) {
+		inner := opts
+		inner.TopK = k
+		return db.searchTextOnlyAll(ctx, query, inner)
+	})
+}
+
+// searchTextOnlyAll is SearchTextOnly before the gate: the word indexes,
+// plus the CJK bigrams when the query holds CJK text.
+func (db *DB) searchTextOnlyAll(ctx context.Context, query string, opts TextSearchOptions) ([]core.ScoredEmbedding, error) {
 	results, err := db.searchTextOnlyWords(ctx, query, opts)
 	if err != nil || opts.skipCJKBigrams || !core.ContainsCJK(query) {
 		return results, err

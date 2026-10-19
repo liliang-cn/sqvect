@@ -64,6 +64,12 @@ type VectorAggregateRequest struct {
 	Filter      map[string]string   `json:"filter,omitempty"`        // metadata equality filter
 	GroupBy     string              `json:"group_by,omitempty"`      // metadata field; empty means one unnamed group over everything matched
 	MaxPerGroup int                 `json:"max_per_group,omitempty"` // 0 = no cap
+	// ExcludeDocuments leaves out the rows of the documents this condition
+	// on the documents table selects, with one ? per ExcludeDocumentsArgs;
+	// rows that belong to no document are never excluded by it. It is SQL,
+	// so it is set by the facade and never read from a request's JSON.
+	ExcludeDocuments     string        `json:"-"`
+	ExcludeDocumentsArgs []interface{} `json:"-"`
 }
 
 // VectorAggregateGroup is the answer for one group.
@@ -243,6 +249,7 @@ func buildVectorAggregateQuery(d sqldialect.Dialect, vectorExpr string, req Vect
 		query += " AND " + d.JSONTextGuarded("metadata", k) + " = ?"
 		args = append(args, req.Filter[k])
 	}
+	query, args = excludeDocuments(query, args, req.ExcludeDocuments, req.ExcludeDocumentsArgs)
 
 	// The real ordering guarantee is applied in Go below; this only keeps the
 	// scan itself stable, which makes a query plan and a log line reproducible.

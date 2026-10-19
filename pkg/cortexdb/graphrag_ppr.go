@@ -755,9 +755,6 @@ func (db *DB) chunksInScope(ctx context.Context, ids []string, collection string
 			if collection != "" && coll != collection {
 				continue
 			}
-			if !allowDocumentID(filters, docID) {
-				continue
-			}
 			out[id] = GraphRAGChunkResult{ID: id, DocumentID: docID, Content: content}
 		}
 		if err := rows.Err(); err != nil {
@@ -765,6 +762,16 @@ func (db *DB) chunksInScope(ctx context.Context, ids []string, collection string
 			return nil, err
 		}
 		_ = rows.Close()
+	}
+	docIDs := make([]string, 0, len(out))
+	for _, chunk := range out {
+		docIDs = append(docIDs, chunk.DocumentID)
+	}
+	hidden := db.hiddenAmong(ctx, docIDs)
+	for id, chunk := range out {
+		if !allowDocument(filters, hidden, chunk.DocumentID) {
+			delete(out, id)
+		}
 	}
 	return out, nil
 }

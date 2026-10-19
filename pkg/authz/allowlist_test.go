@@ -57,7 +57,7 @@ func TestEveryToolAndEveryArgumentIsClassifiedForConfinedKeys(t *testing.T) {
 	own := []string{"build_context", "changes_since", "cortex_query", "get_chunks",
 		"graph_health", "knowledge_memory_consolidate", "knowledge_memory_expand_entity_context",
 		"knowledge_memory_promote_to_knowledge", "knowledge_memory_reflect", "memory_list_all",
-		"search_chunks_by_entities", "search_paths", "vector_dimension_repair"}
+		"search_chunks_by_entities", "search_paths", "sweep_expired", "vector_dimension_repair"}
 	for _, name := range own {
 		if why, ok := refused[name]; !ok || why == defaultRefusal || why == "" {
 			t.Errorf("%s lost its own reason: %q", name, why)

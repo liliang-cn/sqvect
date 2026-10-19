@@ -38,6 +38,7 @@ func (t *GraphRAGToolbox) Definitions() []ToolDefinition {
 					"chunk_overlap": toolIntegerSchema("Optional chunk overlap in words."),
 					"metadata":      toolMapSchema("Optional document metadata. Kept on the document record, on the document graph node and on every chunk, and returned with every search hit."),
 					"dedupe":        toolBooleanSchema("When true, content already stored under another document_id of the same collection is not ingested again; the response names that document in duplicate_of. A re-ingest identical to what is stored writes nothing either way and reports unchanged."),
+					"expires_at":    toolStringSchema("Optional RFC 3339 instant (2031-10-18T00:00:00Z) after which the document is left out of every search and removed, with its chunks and graph nodes, by `cortexdb-mcp-stdio --sweep-expired`. This field alone sets it; a metadata key of the same name is yours and is not read."),
 				},
 			),
 		},
@@ -510,6 +511,7 @@ func (t *GraphRAGToolbox) Definitions() []ToolDefinition {
 	// --- end execution graph ---
 	// --- point-in-time reads (pkg/cortexdb/temporal_tooldefs.go) ---
 	definitions = append(definitions, temporalToolDefinitions()...)
+	definitions = append(definitions, expiryToolDefinitions()...)
 	// --- end point-in-time reads ---
 	definitions = append(definitions, changeToolDefinitions()...)
 	return append(definitions, KnowledgeMemoryFacadeToolDefinitions()...)
@@ -532,6 +534,9 @@ func (t *GraphRAGToolbox) Call(ctx context.Context, name string, input json.RawM
 	// --- end execution graph ---
 	// --- point-in-time reads (pkg/cortexdb/temporal_tooldefs.go) ---
 	if resp, handled, err := t.callTemporalTool(ctx, name, input); handled {
+		return resp, err
+	}
+	if resp, handled, err := t.callExpiryTool(ctx, name, input); handled {
 		return resp, err
 	}
 	// --- end point-in-time reads ---

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 	"github.com/liliang-cn/cortexdb/v2/pkg/graph"
@@ -268,7 +269,9 @@ func buildKnowledgeChunkArtifacts(input knowledgeMutationInput, collection strin
 			"title":       input.Title,
 		}
 		for key, value := range input.Metadata {
-			metadata[key] = value
+			if !recordOnlyKey(key) {
+				metadata[key] = value
+			}
 		}
 
 		embeddings = append(embeddings, &core.Embedding{
@@ -841,6 +844,7 @@ func (db *DB) contentHolderQuery() string {
 		WHERE ` + db.Dialect().JSONTextGuarded("d.metadata", contentHashKey) + ` = ?
 		  AND d.id <> ?
 		  AND EXISTS (SELECT 1 FROM embeddings e JOIN collections c ON c.id = e.collection_id WHERE e.doc_id = d.id AND c.name = ?)
+		  AND ` + db.visiblePredicate() + `
 	`
 }
 
@@ -850,7 +854,8 @@ func (db *DB) contentHolderQuery() string {
 // sixteen in another) and answers the smallest id, so the answer does not
 // depend on the order the rows come in. On PostgreSQL the hash is locked for
 // the transaction first, which is what makes two racing ingests wait for
-// each other there.
+// each other there. A holder the search gate hides (expired) does not hold
+// the content: what a search cannot serve is not a copy.
 func (db *DB) contentHolderTx(ctx context.Context, tx *sql.Tx, hash, exceptID, collection string) (string, error) {
 	if db.Dialect().Kind() == sqldialect.Postgres {
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, hash); err != nil {
@@ -858,7 +863,7 @@ func (db *DB) contentHolderTx(ctx context.Context, tx *sql.Tx, hash, exceptID, c
 		}
 	}
 	var holder sql.NullString
-	err := db.querierQueryRow(ctx, tx, db.contentHolderQuery(), hash, exceptID, collection).Scan(&holder)
+	err := db.querierQueryRow(ctx, tx, db.contentHolderQuery(), hash, exceptID, collection, instant(time.Now())).Scan(&holder)
 	if err != nil {
 		return "", fmt.Errorf("look up content hash: %w", err)
 	}

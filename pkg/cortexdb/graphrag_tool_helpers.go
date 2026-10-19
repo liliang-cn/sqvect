@@ -97,10 +97,17 @@ func (t *GraphRAGToolbox) loadToolChunks(ctx context.Context, scoreMap map[strin
 		}
 	}
 
+	// A chunk of an expired document is not served by id either: get_chunks,
+	// build_context and search_chunks_by_entities all load through here.
+	docIDs := make([]string, 0, len(embeddings))
+	for _, emb := range embeddings {
+		docIDs = append(docIDs, emb.DocumentID)
+	}
+	hidden := t.db.hiddenAmong(ctx, docIDs)
 	chunks := make([]ToolChunk, 0, len(orderedIDs))
 	for _, chunkID := range orderedIDs {
 		emb, ok := embeddings[chunkID]
-		if !ok {
+		if !ok || !allowDocument(nil, hidden, emb.DocumentID) {
 			continue
 		}
 		score := 0.0

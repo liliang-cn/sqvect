@@ -42,6 +42,10 @@ type KnowledgeSaveRequest struct {
 	Metadata     map[string]string   `json:"metadata,omitempty"`
 	Entities     []ToolEntityInput   `json:"entities,omitempty"`
 	Relations    []ToolRelationInput `json:"relations,omitempty"`
+	// ExpiresAt is an RFC 3339 instant after which the item is left out of
+	// every search and removed by the sweep. Empty removes the expiry;
+	// absent keeps the one stored, as knowledge_update does.
+	ExpiresAt *string `json:"expires_at,omitempty"`
 }
 
 // KnowledgeSaveResponse summarizes a knowledge write.
@@ -65,6 +69,9 @@ type KnowledgeUpdateRequest struct {
 	Metadata     map[string]string   `json:"metadata,omitempty"`
 	Entities     []ToolEntityInput   `json:"entities,omitempty"`
 	Relations    []ToolRelationInput `json:"relations,omitempty"`
+	// ExpiresAt sets the expiry, removes it when empty, and keeps the stored
+	// one when absent, whatever the update does with metadata.
+	ExpiresAt *string `json:"expires_at,omitempty"`
 }
 
 // KnowledgeGetRequest fetches a knowledge item by ID.

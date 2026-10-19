@@ -129,7 +129,7 @@ var (
 	walkArgs   = []string{"entity_names", "chunk_window", "max_context_chars", "max_context_chunks", "per_document_limit", "max_related_chunks", "max_expansion_seeds", "max_hops", "max_traversal_nodes"}
 	recallArgs = []string{"top_k_knowledge", "top_k_memories", "max_memory_chars", "max_memory_items", "session_id"}
 	memoryArgs = []string{"content", "role", "importance", "ttl_seconds", "session_id", "metadata.*"}
-	docArgs    = []string{"content", "title", "source_url", "author", "metadata.*", "chunk_size", "chunk_overlap"}
+	docArgs    = []string{"content", "title", "source_url", "author", "metadata.*", "chunk_size", "chunk_overlap", "expires_at"}
 	// An entity or a relation the caller declares is a node or an edge of
 	// the shared graph, keyed by name across every collection, so declaring
 	// one rewrites what every collection sees: its description, its
@@ -256,6 +256,7 @@ var refusedTools = map[string]string{
 	"changes_since":                          "feeds changes of every store and every collection",
 	"graph_health":                           "reports on every store",
 	"vector_dimension_repair":                "rewrites every store",
+	"sweep_expired":                          "removes expired rows of every store and every collection",
 }
 
 // defaultRefusal is why a tool with no reason of its own is refused: the

@@ -317,6 +317,9 @@ func (b *KnowledgeMemory) Neighbors(ctx context.Context, req KnowledgeMemoryNeig
 	if err != nil {
 		return nil, err
 	}
+	// The chunk and document nodes of an expired document are not
+	// neighbors of anything: the gate applies to the graph as to the chunks.
+	neighbors, _ = b.db.withoutExpiredDocuments(ctx, neighbors, nil, nil)
 
 	return &KnowledgeMemoryNeighborsResponse{
 		ResolvedNodeID: nodeID,
@@ -342,6 +345,15 @@ func (b *KnowledgeMemory) ShortestPath(ctx context.Context, req KnowledgeMemoryS
 	if err != nil {
 		return nil, err
 	}
+	// A path through a node of an expired document, or over an edge only
+	// expired documents back, is not returned: the answer is the one the
+	// graph gives when there is none. The walk itself runs on the stored
+	// graph, so a longer live path is not looked for until the sweep.
+	nodes, edges := b.db.withoutExpiredDocuments(ctx, path.Nodes, path.Edges, nil)
+	if len(nodes) != len(path.Nodes) || len(edges) != len(path.Edges) {
+		return nil, fmt.Errorf("no path found from %s to %s", fromID, toID)
+	}
+	path.Edges = edges
 
 	return &KnowledgeMemoryShortestPathResponse{
 		FromNodeID: fromID,

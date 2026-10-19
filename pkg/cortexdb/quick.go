@@ -49,12 +49,9 @@ func (q *Quick) Search(ctx context.Context, query []float32, topK int) ([]core.S
 
 // SearchInCollection performs similarity search within a collection.
 func (q *Quick) SearchInCollection(ctx context.Context, collection string, query []float32, topK int) ([]core.ScoredEmbedding, error) {
-	opts := core.SearchOptions{
-		Collection: collection,
-		TopK:       topK,
-		Threshold:  0.0,
-	}
-	return q.db.store.Search(ctx, query, opts)
+	return q.db.gatedSearch(ctx, topK, func(k int) ([]core.ScoredEmbedding, error) {
+		return q.db.store.Search(ctx, query, core.SearchOptions{Collection: collection, TopK: k, Threshold: 0.0})
+	})
 }
 
 // AddText adds text with automatic ID generation and embedding.

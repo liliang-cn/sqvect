@@ -62,6 +62,18 @@ func pgAggregateWhere(req AggregationRequest, args *pgArgs) []string {
 	for field, value := range req.Filters {
 		where = append(where, pgMetadataEquals(field, value, args))
 	}
+	if req.ExcludeDocuments != "" {
+		// The condition is written with ?; each becomes the next $n.
+		parts := strings.Split(req.ExcludeDocuments, "?")
+		var b strings.Builder
+		for i, part := range parts {
+			b.WriteString(part)
+			if i < len(parts)-1 {
+				b.WriteString(args.add(req.ExcludeDocumentsArgs[i]))
+			}
+		}
+		where = append(where, "(doc_id IS NULL OR doc_id NOT IN (SELECT id FROM documents WHERE "+b.String()+"))")
+	}
 	return where
 }
 

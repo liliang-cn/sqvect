@@ -10,6 +10,23 @@ import (
 )
 
 func (db *DB) cleanupKnowledgeArtifacts(ctx context.Context, knowledgeID string) error {
+	return db.cleanupKnowledgeArtifactsIf(ctx, knowledgeID, "")
+}
+
+// errKept is what a conditional cleanup returns when the record no longer
+// matches its condition: nothing was deleted, the transaction was rolled
+// back.
+var errKept = errors.New("record kept: its condition no longer holds")
+
+// cleanupKnowledgeArtifactsIf is cleanupKnowledgeArtifacts under an extra
+// SQL condition on the record, with the condition's arguments after the
+// id. The record is deleted last, and a record the condition does not match
+// rolls the whole transaction back with errKept: the sweep never removes
+// the chunks of a document renewed since it was listed. A driver that
+// cannot count the deleted rows cannot prove the delete, and the record is
+// kept the same way. With no condition, a record already gone is no error,
+// as on main.
+func (db *DB) cleanupKnowledgeArtifactsIf(ctx context.Context, knowledgeID, condition string, args ...any) error {
 	if err := db.graph.InitGraphSchema(ctx); err != nil {
 		return fmt.Errorf("init graph schema: %w", err)
 	}
@@ -36,8 +53,12 @@ func (db *DB) cleanupKnowledgeArtifacts(ctx context.Context, knowledgeID string)
 	if _, err := db.txExec(ctx, tx, `DELETE FROM embeddings WHERE doc_id = ?`, knowledgeID); err != nil {
 		return fmt.Errorf("delete knowledge chunks: %w", err)
 	}
-	if _, err := db.txExec(ctx, tx, `DELETE FROM documents WHERE id = ?`, knowledgeID); err != nil {
+	result, err := db.txExec(ctx, tx, `DELETE FROM documents WHERE id = ? `+condition, append([]any{knowledgeID}, args...)...)
+	if err != nil {
 		return fmt.Errorf("delete knowledge document: %w", err)
+	}
+	if deleted, _ := result.RowsAffected(); deleted == 0 && condition != "" {
+		return errKept
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit knowledge cleanup transaction: %w", err)

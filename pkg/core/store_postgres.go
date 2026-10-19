@@ -117,6 +117,9 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 		// selects the documents that carry metadata _content_sha256; this is
 		// its expression.
 		`CREATE INDEX IF NOT EXISTS idx_documents_content_sha256 ON documents ((CASE WHEN NULLIF(metadata::text, '') IS NOT NULL THEN (NULLIF(metadata::text, '')::jsonb ->> '_content_sha256') ELSE NULL END))`,
+		// The read-time expiry filter (pkg/cortexdb/expiry.go) selects the
+		// documents that carry metadata _expires_at; this is its expression.
+		`CREATE INDEX IF NOT EXISTS idx_documents_expires_at ON documents ((CASE WHEN NULLIF(metadata::text, '') IS NOT NULL THEN (NULLIF(metadata::text, '')::jsonb ->> '_expires_at') ELSE NULL END))`,
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS embeddings (
 			id TEXT PRIMARY KEY,
 			collection_id INTEGER NOT NULL DEFAULT 1 REFERENCES collections(id) ON DELETE CASCADE,

@@ -141,8 +141,33 @@ func (t *GraphRAGToolbox) SearchPaths(ctx context.Context, req ToolSearchPathsRe
 	resp.Truncated = found.Truncated
 	resp.Expansions = found.Expansions
 
-	seenChunk := map[string]bool{}
+	// A path over an edge the expiry leaves out is no path, as in
+	// knowledge_memory_shortest_path; an edge that touches a node of an
+	// expired document is left out with the node. The gate runs once over
+	// every path found, not once per path.
+	var metNodes []*graph.GraphNode
+	var metEdges []*graph.GraphEdge
 	for _, p := range found.Paths {
+		metNodes = append(metNodes, p.Nodes...)
+		metEdges = append(metEdges, p.Edges...)
+	}
+	_, keptEdges := t.db.withoutExpiredDocuments(ctx, metNodes, metEdges, nil)
+	edgeKept := make(map[string]*graph.GraphEdge, len(keptEdges))
+	for _, e := range keptEdges {
+		edgeKept[e.ID] = e
+	}
+	seenChunk := map[string]bool{}
+paths:
+	for _, p := range found.Paths {
+		edges := make([]*graph.GraphEdge, 0, len(p.Edges))
+		for _, e := range p.Edges {
+			kept, ok := edgeKept[e.ID]
+			if !ok {
+				continue paths
+			}
+			edges = append(edges, kept)
+		}
+		p.Edges = edges
 		rp := RetrievedPath{
 			From:     p.From,
 			To:       p.To,

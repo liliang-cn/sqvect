@@ -2,6 +2,7 @@ package cortexdb
 
 import (
 	"context"
+	"time"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 )
@@ -29,7 +30,17 @@ import (
 // outside a conservative identifier shape is refused rather than escaped. See
 // validateAggregationRequest.
 func (db *DB) Aggregate(ctx context.Context, req core.AggregationRequest) (*core.AggregationResponse, error) {
+	req.ExcludeDocuments, req.ExcludeDocumentsArgs = db.hiddenDocumentsWhere()
 	return db.store.Aggregate(ctx, req)
+}
+
+// hiddenDocumentsWhere is the condition on the documents table that selects
+// every document the gate hides, for the aggregates, whose rows the store
+// counts and compares without loading them through a chunk path. It is one
+// condition, not a list of ids, so the number of hidden documents never
+// reaches the bound-parameter limit of either store.
+func (db *DB) hiddenDocumentsWhere() (string, []interface{}) {
+	return db.expiredPredicate(), []interface{}{instant(time.Now())}
 }
 
 // SearchWithFacets filters a vector search by metadata facets and, when asked,
@@ -40,8 +51,22 @@ func (db *DB) Aggregate(ctx context.Context, req core.AggregationRequest) (*core
 // question a model actually asks of facets — what values does this field take,
 // and how many of each — is already answered by aggregate_metadata with a
 // group_by. Programs get the whole thing; agents get the part they can use.
+//
+// The hits pass the document gate like every search; the facet counts are the
+// store's and count every row the facets match.
 func (db *DB) SearchWithFacets(ctx context.Context, query []float32, opts core.FacetedSearchOptions) ([]core.ScoredEmbedding, []core.FacetResult, error) {
-	return db.store.SearchWithFacets(ctx, query, opts)
+	var facets []core.FacetResult
+	hits, err := db.gatedSearch(ctx, opts.TopK, func(k int) ([]core.ScoredEmbedding, error) {
+		inner := opts
+		inner.TopK = k
+		hits, counted, err := db.store.SearchWithFacets(ctx, query, inner)
+		facets = counted
+		return hits, err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return hits, facets, nil
 }
 
 // VectorAggregate reduces the vectors themselves: the centroid, the geometric
@@ -53,6 +78,7 @@ func (db *DB) SearchWithFacets(ctx context.Context, query []float32, opts core.F
 // these near-duplicates is the canonical one" and "give me the one record that
 // represents this cluster" with arithmetic and no model in the loop.
 func (db *DB) VectorAggregate(ctx context.Context, req core.VectorAggregateRequest) (*core.VectorAggregateResponse, error) {
+	req.ExcludeDocuments, req.ExcludeDocumentsArgs = db.hiddenDocumentsWhere()
 	return db.store.VectorAggregate(ctx, req)
 }
 

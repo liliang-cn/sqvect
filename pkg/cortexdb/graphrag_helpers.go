@@ -286,7 +286,19 @@ func (db *DB) upsertGraphRAGDocumentRecord(ctx context.Context, doc *core.Docume
 	existing.Content = doc.Content
 	existing.SourceURL = doc.SourceURL
 	existing.Author = doc.Author
-	existing.Metadata = doc.Metadata
+	// The record's own keys (the expiry) are set by their explicit field
+	// only, which InsertGraphDocument has not: it keeps them, as a
+	// re-ingest that leaves the field out does.
+	metadata := doc.Metadata
+	for k, v := range existing.Metadata {
+		if recordOnlyKey(k) {
+			if metadata == nil {
+				metadata = map[string]any{}
+			}
+			metadata[k] = v
+		}
+	}
+	existing.Metadata = metadata
 	existing.Version++
 	if err := db.store.UpdateDocument(ctx, existing); err != nil {
 		return fmt.Errorf("update document record: %w", err)

@@ -54,6 +54,9 @@ func TestATypedKnowledgeWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 		sent[k] = v
 	}
 	for _, k := range cortexdb.EngineDocumentKeys() {
+		if k == "_expires_at" {
+			continue // a document with no expiry has none: confined_expiry_roundtrip_test.go
+		}
 		if stored[k] == "" {
 			t.Fatalf("the document carries no %s: %v", k, stored)
 		}

@@ -188,11 +188,11 @@ func TestARetiredChunkIsRecordedAsAReingest(t *testing.T) {
 }
 
 // EngineDocumentKeys names every key the engine writes on a document record
-// from its content, its chunking and its fields, so a port that hands them
+// from its content, its chunking and its fields (the expiry here), so a port that hands them
 // to the facade hands all of them and no more.
 func TestEngineDocumentKeysNameEveryKeyTheEngineWrites(t *testing.T) {
 	db, tools, ctx := openIngestBrain(t, "engine-keys")
-	if _, err := tools.IngestDocument(ctx, ToolIngestDocumentRequest{DocumentID: "d1", Content: threeChunks, Metadata: map[string]string{"team": "a"}}); err != nil {
+	if _, err := tools.IngestDocument(ctx, ToolIngestDocumentRequest{DocumentID: "d1", Content: threeChunks, Metadata: map[string]string{"team": "a"}, ExpiresAt: strPtr("2031-10-18T00:00:00Z")}); err != nil {
 		t.Fatal(err)
 	}
 	doc, err := db.store.GetDocument(ctx, "d1")

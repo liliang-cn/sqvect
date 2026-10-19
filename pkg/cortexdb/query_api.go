@@ -163,6 +163,10 @@ func (db *DB) Query(ctx context.Context, req QueryRequest) (*QueryResponse, erro
 		if err != nil {
 			return nil, err
 		}
+		// The vector, lexical, hybrid and graph lanes have passed the
+		// document gate already. A source lane names rows by id, which the
+		// brain reads without the gate, so the gate runs here once more.
+		results = db.filterScoredEmbeddings(ctx, results, nil)
 		results = filterQueryScoredEmbeddings(results, req.Filter)
 		if len(results) == 0 {
 			continue
@@ -271,10 +275,8 @@ func (db *DB) runQueryPrefetch(ctx context.Context, req QueryRequest, prefetch Q
 			}
 			vector = embedded
 		}
-		return db.store.Search(ctx, vector, core.SearchOptions{
-			Collection: req.Collection,
-			TopK:       limit,
-			QueryText:  query,
+		return db.gatedSearch(ctx, limit, func(k int) ([]core.ScoredEmbedding, error) {
+			return db.store.Search(ctx, vector, core.SearchOptions{Collection: req.Collection, TopK: k, QueryText: query})
 		})
 	case QueryPrefetchLexical:
 		if strings.TrimSpace(query) == "" {
@@ -297,12 +299,10 @@ func (db *DB) runQueryPrefetch(ctx context.Context, req QueryRequest, prefetch Q
 			}
 			vector = embedded
 		}
-		return db.store.HybridSearch(ctx, vector, query, core.HybridSearchOptions{
-			SearchOptions: core.SearchOptions{
-				Collection: req.Collection,
-				TopK:       limit,
-				QueryText:  query,
-			},
+		return db.gatedSearch(ctx, limit, func(k int) ([]core.ScoredEmbedding, error) {
+			return db.store.HybridSearch(ctx, vector, query, core.HybridSearchOptions{
+				SearchOptions: core.SearchOptions{Collection: req.Collection, TopK: k, QueryText: query},
+			})
 		})
 	case QueryPrefetchGraph:
 		entityNames := prefetch.EntityNames

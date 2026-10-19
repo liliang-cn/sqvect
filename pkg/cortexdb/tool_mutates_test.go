@@ -157,6 +157,7 @@ var toolWrites = map[string]bool{
 	"graph_diff":     false,
 	"changes_since":  false,
 	"vacuum_graph":   true,
+	"sweep_expired":  true,
 
 	// KnowledgeMemory facade.
 	"knowledge_memory_remember":             true,
@@ -177,7 +178,7 @@ var toolWrites = map[string]bool{
 // table so that a tool added without a decision cannot slip through by sharing
 // a name with one already listed, and so that a tool quietly disappearing is
 // noticed too. Change it in the same commit that adds the tool and its row.
-const toolCount = 99
+const toolCount = 100
 
 // TestEveryToolDeclaresWhetherItWrites is the test the Mutates doc comment
 // promises: it makes forgetting impossible rather than merely unlikely.
