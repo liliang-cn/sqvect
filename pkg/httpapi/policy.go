@@ -61,7 +61,9 @@ func authenticate(keys *authz.KeySet, next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "invalid or missing bearer token")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), keyContext{}, key)))
+		// The facade learns the caller the way it does over gRPC: it signs
+		// what this call writes and confines the memory buckets it may reach.
+		next.ServeHTTP(w, r.WithContext(key.CallerContext(context.WithValue(r.Context(), keyContext{}, key))))
 	})
 }
 

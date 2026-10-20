@@ -271,3 +271,36 @@ func TestAnUnclassifiedRouteIsDeniedRatherThanServed(t *testing.T) {
 		t.Fatalf("refusal %q does not say the route was never classified", msg)
 	}
 }
+
+func TestOverRESTASessionIDCannotTakeAUserConfinedKeyIntoAnotherUsersSession(t *testing.T) {
+	srv := newPolicyServer(t, Options{Keys: hermesAndZeus(t)})
+	wantStatus(t, srv, http.MethodPost, "/v1/memory", "op-secret",
+		`{"memory_id":"zs-1","user_id":"zeus","session_id":"zeus-sess","content":"Zeus keeps the thunderbolt in the drawer."}`, http.StatusOK)
+
+	for _, call := range []struct{ path, body string }{
+		{"/v1/memory/search", `{"query":"thunderbolt","user_id":"hermes","session_id":"zeus-sess","top_k":5}`},
+		{"/v1/recall", `{"query":"thunderbolt","user_id":"hermes","session_id":"zeus-sess","disable_knowledge":true}`},
+	} {
+		code, body := do(t, srv, http.MethodPost, call.path, "hermes-secret", call.body)
+		if code != http.StatusOK || strings.Contains(string(body), "zs-1") {
+			t.Fatalf("%s: hermes reached zeus's session over REST (%d): %s", call.path, code, body)
+		}
+	}
+	// The operator still reads it, so the check above is not passing on an
+	// empty search.
+	if code, body := do(t, srv, http.MethodPost, "/v1/memory/search", "op-secret",
+		`{"query":"thunderbolt","session_id":"zeus-sess","top_k":5}`); code != http.StatusOK || !strings.Contains(string(body), "zs-1") {
+		t.Fatalf("operator lost zeus's session (%d): %s", code, body)
+	}
+	wantStatus(t, srv, http.MethodPost, "/v1/memory", "hermes-secret",
+		`{"memory_id":"planted","user_id":"hermes","session_id":"zeus-sess","content":"Planted by hermes."}`, http.StatusNotFound)
+}
+
+func TestOverRESTASaveIsSignedByTheKeyThatMadeIt(t *testing.T) {
+	srv := newPolicyServer(t, Options{Keys: hermesAndZeus(t)})
+	code, body := do(t, srv, http.MethodPost, "/v1/memory", "op-secret",
+		`{"memory_id":"o1","scope":"global","content":"The cache moved to node-b.","metadata":{"written_by":"hermes"}}`)
+	if code != http.StatusOK || !strings.Contains(string(body), `"written_by":"operator"`) {
+		t.Fatalf("REST save not signed by its key (%d): %s", code, body)
+	}
+}

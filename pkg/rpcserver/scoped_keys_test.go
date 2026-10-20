@@ -336,3 +336,55 @@ func TestASaveIsSignedByTheKeyThatMadeItWhateverItClaims(t *testing.T) {
 		t.Fatalf("written_by = %v, want the key operator, not the hermes it claimed", got)
 	}
 }
+
+func TestASessionIDCannotTakeAUserConfinedKeyIntoAnotherUsersSession(t *testing.T) {
+	conn := newPolicyConn(t, Options{Keys: hermesAndZeus(t)})
+	client := rpcv1.NewMemoryServiceClient(conn)
+	for _, m := range []*rpcv1.SaveMemoryRequest{
+		{MemoryId: "zs-1", UserId: "zeus", SessionId: "zeus-sess", Content: "Zeus keeps the thunderbolt in the drawer."},
+		{MemoryId: "g-1", Scope: "global", Content: "The shared thunderbolt policy."},
+	} {
+		if _, err := client.SaveMemory(asKey("op-secret"), m); err != nil {
+			t.Fatalf("operator save %s: %v", m.MemoryId, err)
+		}
+	}
+
+	for name, req := range map[string]*rpcv1.SearchMemoryRequest{
+		"session_id":              {Query: "thunderbolt", UserId: "hermes", SessionId: "zeus-sess", TopK: 5},
+		"plan.filters":            {Query: "thunderbolt", UserId: "hermes", TopK: 5, Plan: &rpcv1.RetrievalPlan{Query: "thunderbolt", Filters: &rpcv1.RetrievalFilters{UserId: "hermes", SessionId: "zeus-sess"}}},
+		"global, owned by no one": {Query: "thunderbolt", UserId: "hermes", Scope: "global", TopK: 5},
+	} {
+		resp, err := client.SearchMemory(asKey("hermes-secret"), req)
+		if err != nil {
+			t.Fatalf("%s: search: %v", name, err)
+		}
+		if len(resp.GetResults()) != 0 {
+			t.Fatalf("%s: hermes read %d rows of a bucket it does not own: %v", name, len(resp.GetResults()), resp.GetResults())
+		}
+	}
+
+	_, err := client.SaveMemory(asKey("hermes-secret"), &rpcv1.SaveMemoryRequest{
+		MemoryId: "planted", UserId: "hermes", SessionId: "zeus-sess", Content: "Planted by hermes.",
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("hermes wrote into zeus's session: %v", err)
+	}
+
+	// Its own session still works, or the confinement is useless.
+	if _, err := client.SaveMemory(asKey("hermes-secret"), &rpcv1.SaveMemoryRequest{
+		MemoryId: "hs-1", UserId: "hermes", SessionId: "hermes-sess", Content: "Hermes tunes the lyre.",
+	}); err != nil {
+		t.Fatalf("hermes was refused its own session: %v", err)
+	}
+	resp, err := client.SearchMemory(asKey("hermes-secret"), &rpcv1.SearchMemoryRequest{
+		Query: "lyre", UserId: "hermes", SessionId: "hermes-sess", TopK: 5,
+	})
+	if err != nil || len(resp.GetResults()) != 1 {
+		t.Fatalf("hermes could not read its own session: %v %v", err, resp.GetResults())
+	}
+	// And the operator, unconfined, still reads every bucket.
+	resp, err = client.SearchMemory(asKey("op-secret"), &rpcv1.SearchMemoryRequest{Query: "thunderbolt", SessionId: "zeus-sess", TopK: 5})
+	if err != nil || len(resp.GetResults()) != 1 {
+		t.Fatalf("operator lost zeus's session: %v %v", err, resp.GetResults())
+	}
+}
