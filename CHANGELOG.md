@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.134.1] - 2026-10-20
+
+### Fixed
+
+- A key confined to some user_ids could read and write another user's
+  session memories by sending its own `user_id` beside the other user's
+  `session_id`: the policy checked the fields and the session then picked
+  the bucket. A confined key now reaches only memory buckets its user owns,
+  over gRPC, REST and recall alike. A bucket it may not read answers like
+  an empty one, and a write into it is refused as not found. The global
+  bucket, which no user owns, is out of reach for a user-confined key too,
+  as unowned rows already were for reads by id. Unconfined keys and the
+  legacy token are unchanged.
+- REST saves are signed with `written_by` and `updated_by` from the
+  authenticated key, as gRPC saves have been since v2.134.0.
+
 ## [2.134.0] - 2026-10-19
 
 ### Added
