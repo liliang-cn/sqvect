@@ -88,12 +88,17 @@ func (g *GeoIndex) Insert(point GeoPoint) error {
 		g.removeFromGrid(old)
 	}
 
-	// Store point
-	g.points[point.ID] = &point
+	// Store a copy. The GeoPoint itself already arrived by value, but its
+	// Metadata is a map and so still the caller's: keeping it would let a
+	// write made after Insert returned reach the indexed point, and would
+	// make the copy GetPoint takes on the way out worth nothing, because the
+	// map it copies is the caller's either way.
+	stored := clonePoint(point)
+	g.points[stored.ID] = stored
 
 	// Add to grid index
-	gridKey := g.getGridKey(point.Coordinate)
-	g.grid[gridKey] = append(g.grid[gridKey], &point)
+	gridKey := g.getGridKey(stored.Coordinate)
+	g.grid[gridKey] = append(g.grid[gridKey], stored)
 
 	return nil
 }
@@ -165,7 +170,7 @@ func (g *GeoIndex) SearchRadius(center Coordinate, radius float64, unit Distance
 			// Convert distance back to requested unit
 			displayDist := convertFromKM(dist, unit)
 			results = append(results, GeoSearchResult{
-				Point:    *point,
+				Point:    *clonePoint(*point),
 				Distance: displayDist,
 			})
 		}
@@ -197,7 +202,7 @@ func (g *GeoIndex) SearchKNN(center Coordinate, k int) ([]GeoSearchResult, error
 	for _, point := range g.points {
 		dist := haversineDistance(center, point.Coordinate)
 		results = append(results, GeoSearchResult{
-			Point:    *point,
+			Point:    *clonePoint(*point),
 			Distance: dist,
 		})
 	}
@@ -240,7 +245,7 @@ func (g *GeoIndex) SearchBoundingBox(bbox BoundingBox) ([]GeoPoint, error) {
 						point.Coordinate.Lat <= bbox.MaxLat &&
 						point.Coordinate.Lng >= bbox.MinLng &&
 						point.Coordinate.Lng <= bbox.MaxLng {
-						results = append(results, *point)
+						results = append(results, *clonePoint(*point))
 					}
 				}
 			}
@@ -272,7 +277,7 @@ func (g *GeoIndex) SearchPolygon(polygon []Coordinate) ([]GeoPoint, error) {
 
 		// Point-in-polygon test using ray casting algorithm
 		if pointInPolygon(point.Coordinate, polygon) {
-			results = append(results, *point)
+			results = append(results, *clonePoint(*point))
 		}
 	}
 
@@ -301,13 +306,33 @@ func (g *GeoIndex) GetPoint(id string) (*GeoPoint, bool) {
 	point, exists := g.points[id]
 	if exists {
 		// Return a copy to prevent external modification
-		copy := *point
-		return &copy, true
+		return clonePoint(*point), true
 	}
 	return nil, false
 }
 
 // Helper functions
+
+// clonePoint copies a point and its metadata, so neither the index nor the
+// caller can reach into the other's copy.
+//
+// Every way in and out of the index goes through this. A GeoPoint crosses the
+// boundary by value, which copies the ID and the coordinate but leaves
+// Metadata pointing at one shared map — so a caller that kept the map it
+// inserted, or that writes a key on a point a search returned, silently
+// rewrites what the index reports to everybody else. The copy is one level
+// deep, which is what a map[string]interface{} of scalars needs; a caller that
+// stores a mutable value inside it still shares that value.
+func clonePoint(point GeoPoint) *GeoPoint {
+	out := point
+	if point.Metadata != nil {
+		out.Metadata = make(map[string]interface{}, len(point.Metadata))
+		for k, v := range point.Metadata {
+			out.Metadata[k] = v
+		}
+	}
+	return &out
+}
 
 // getGridKey calculates the grid cell key for a coordinate
 func (g *GeoIndex) getGridKey(coord Coordinate) int64 {
