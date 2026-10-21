@@ -24,10 +24,10 @@ import (
 // connection to it. The end-to-end shape matters here: a scope check that only
 // holds in a unit test of the interceptor is a scope check that has not been
 // wired up.
-func newPolicyConn(t *testing.T, opts Options) *grpc.ClientConn {
+func newPolicyConn(t *testing.T, opts Options, dbOpts ...cortexdb.Option) *grpc.ClientConn {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "scoped.db")
-	db, err := cortexdb.Open(cortexdb.DefaultConfig(dbPath))
+	db, err := cortexdb.Open(cortexdb.DefaultConfig(dbPath), dbOpts...)
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
