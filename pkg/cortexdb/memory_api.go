@@ -107,12 +107,17 @@ func (db *DB) SaveMemory(ctx context.Context, req MemorySaveRequest) (*MemorySav
 	if err != nil {
 		return nil, err
 	}
-	if ok, err := db.memoryBucketPermitted(ctx, bucketID, req.UserID, true); err != nil {
-		return nil, err
-	} else if !ok {
-		return nil, errMemoryBucketWithheld
+	// The global bucket belongs to nobody, whoever happens to write to it
+	// first: an owner there would make the shared pool one user's rows.
+	owner := req.UserID
+	if scope == MemoryScopeGlobal {
+		owner = ""
 	}
-	if err := db.ensureMemoryBucket(ctx, bucketID, req.UserID, scope, normalizeMemoryNamespace(req.Namespace)); err != nil {
+	namespace := normalizeMemoryNamespace(req.Namespace)
+	if err := db.checkMemoryWrite(ctx, bucketID, req.UserID, MemoryBucket{UserID: owner, Scope: scope, Namespace: namespace}); err != nil {
+		return nil, err
+	}
+	if err := db.ensureMemoryBucket(ctx, bucketID, owner, scope, namespace); err != nil {
 		return nil, err
 	}
 
@@ -311,7 +316,7 @@ func (db *DB) searchMemory(ctx context.Context, req MemorySearchRequest, recordR
 	}
 	// A bucket the caller may not read answers the way an empty one does, so a
 	// confined caller cannot tell another user's session from no session.
-	if ok, err := db.memoryBucketPermitted(ctx, bucketID, "", false); err != nil {
+	if ok, err := db.memoryReadPermitted(ctx, bucketID); err != nil {
 		return nil, err
 	} else if !ok {
 		return &MemorySearchResponse{Query: resolution.Plan.Query, Plan: resolution.Plan, Decision: resolution.Decision}, nil

@@ -111,9 +111,14 @@ func (b *KnowledgeMemory) Recall(ctx context.Context, req KnowledgeMemoryRecallR
 	// Fold edge-accurate graph traversal into recall so relational questions are
 	// answered from graph edges, not just lexical chunk text.
 	graphSeeds := append(append([]string{}, req.EntityNames...), resp.Entities...)
-	doneFacts := observability.Time(ctx, "graph-facts")
-	resp.GraphFacts = b.collectGraphFacts(ctx, query, graphSeeds)
-	doneFacts()
+	// The graph is shared across collections and users and its edges carry
+	// no scope, so a confined caller gets no facts from it: an edge one
+	// tenant's document put there would answer another tenant's recall.
+	if _, confined := callerScopeOf(ctx); !confined {
+		doneFacts := observability.Time(ctx, "graph-facts")
+		resp.GraphFacts = b.collectGraphFacts(ctx, query, graphSeeds)
+		doneFacts()
+	}
 	resp.ContextPack = buildKnowledgeMemoryContextPack(query, resp.Memories, knowledgeResp, resp.Entities, resp.GraphFacts, req.MaxMemoryItems, req.MaxMemoryChars)
 	if len(resp.Entities) == 0 {
 		resp.Entities = resp.ContextPack.Entities

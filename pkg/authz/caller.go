@@ -11,17 +11,33 @@ import (
 // same context, so a check made in pkg/cortexdb holds the same on either.
 //
 // It names the key as the writer, so what the call saves records it as
-// written_by. For a key confined to some user_ids it also confines the memory
-// buckets the call may resolve to: the request's user_id is checked here
-// already, but a session_id picks the bucket, and a session another user owns
-// would otherwise answer to a key that only sent its own user_id beside it.
+// written_by. For a confined key it also hands the facade the key's scope as
+// row rules, the same rules the typed RPCs apply to a row read by id
+// (rpcserver/ownership.go): a memory bucket must match every confined field,
+// and has no collection; a knowledge collection must be among the key's, and
+// knowledge has no user_id, scope or namespace. The request's fields are
+// checked by the policy already, but what they resolve to is checked here: a
+// session_id picks another user's bucket, a recall's knowledge half reaches
+// every collection.
 func (k Key) CallerContext(ctx context.Context) context.Context {
 	ctx = cortexdb.WithWriter(ctx, k.ID)
 	if k.Scope.IsZero() {
 		return ctx
 	}
 	scope := k.Scope
-	return cortexdb.WithMemoryOwners(ctx, func(owner string) bool {
-		return scope.Permits(FieldUserID, owner)
+	return cortexdb.WithCallerScope(ctx, cortexdb.CallerScope{
+		Key: k.ID,
+		Memory: func(b cortexdb.MemoryBucket) bool {
+			return scope.Permits(FieldUserID, b.UserID) &&
+				scope.Permits(FieldScope, b.Scope) &&
+				scope.Permits(FieldNamespace, b.Namespace) &&
+				scope.Permits(FieldCollection, "")
+		},
+		Knowledge: func(collection string) bool {
+			return scope.Permits(FieldCollection, collection) &&
+				scope.Permits(FieldUserID, "") &&
+				scope.Permits(FieldScope, "") &&
+				scope.Permits(FieldNamespace, "")
+		},
 	})
 }

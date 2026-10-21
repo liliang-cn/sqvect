@@ -304,3 +304,36 @@ func TestOverRESTASaveIsSignedByTheKeyThatMadeIt(t *testing.T) {
 		t.Fatalf("REST save not signed by its key (%d): %s", code, body)
 	}
 }
+
+// A recall is two searches, memory and knowledge, and graph facts from the
+// shared graph. Each half answers only what the key's scope reaches.
+func TestOverRESTARecallStaysInsideTheKeysScope(t *testing.T) {
+	keys, err := authz.NewKeySet([]authz.Key{
+		{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite},
+		{ID: "hermes", Secret: "hermes-secret", Clearance: authz.ReadOnly, Scope: authz.Scope{UserID: "hermes"}},
+		{ID: "notes", Secret: "notes-secret", Clearance: authz.ReadOnly, Scope: authz.Scope{Collection: "notes"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newPolicyServer(t, Options{Keys: keys})
+	wantStatus(t, srv, http.MethodPost, "/v1/memory", "op-secret",
+		`{"memory_id":"zeus-1","user_id":"zeus","scope":"user","content":"Zeus keeps the drawer key."}`, http.StatusOK)
+	wantStatus(t, srv, http.MethodPost, "/v1/knowledge", "op-secret",
+		`{"knowledge_id":"hr","collection":"secrets","content":"Orpheus earns SECRETSALARY.","entities":[{"name":"Orpheus"},{"name":"Olympus"}],"relations":[{"from":"Orpheus","to":"Olympus","type":"paid_by"}]}`, http.StatusOK)
+
+	for _, call := range []struct{ secret, body, leak string }{
+		{"hermes-secret", `{"query":"Orpheus earns","user_id":"hermes","collection":"secrets","entity_names":["Orpheus"]}`, "SECRETSALARY"},
+		{"hermes-secret", `{"query":"Orpheus earns","user_id":"hermes","entity_names":["Orpheus"]}`, "paid_by"},
+		{"notes-secret", `{"query":"drawer key","collection":"notes","user_id":"zeus","scope":"user"}`, "zeus-1"},
+	} {
+		code, body := do(t, srv, http.MethodPost, "/v1/recall", call.secret, call.body)
+		if code != http.StatusOK || strings.Contains(string(body), call.leak) {
+			t.Fatalf("%s recalled %q outside its scope (%d): %s", call.secret, call.leak, code, body)
+		}
+	}
+	if code, body := do(t, srv, http.MethodPost, "/v1/recall", "op-secret",
+		`{"query":"Orpheus earns","collection":"secrets","entity_names":["Orpheus"]}`); code != http.StatusOK || !strings.Contains(string(body), "SECRETSALARY") {
+		t.Fatalf("the operator lost the recall (%d): %s", code, body)
+	}
+}

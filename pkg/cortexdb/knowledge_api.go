@@ -249,8 +249,13 @@ func (db *DB) SearchKnowledge(ctx context.Context, req KnowledgeSearchRequest) (
 		return nil, err
 	}
 
+	collection := applyRetrievalPlanCollection(req.Collection, resolution.Plan.Filters)
+	// A collection the caller may not read answers like an empty one.
+	if !knowledgeReadPermitted(ctx, collection) {
+		return &KnowledgeSearchResponse{Query: resolution.Plan.Query, Plan: resolution.Plan, Decision: resolution.Decision}, nil
+	}
 	opts := GraphRAGQueryOptions{
-		Collection:          applyRetrievalPlanCollection(req.Collection, resolution.Plan.Filters),
+		Collection:          collection,
 		TopK:                req.TopK,
 		MaxHops:             req.MaxHops,
 		MaxRelatedChunks:    req.MaxRelatedChunks,

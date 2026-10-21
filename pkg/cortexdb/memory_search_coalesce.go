@@ -40,7 +40,12 @@ func (db *DB) searchMemoryShared(ctx context.Context, req MemorySearchRequest) (
 	if err != nil {
 		return db.searchMemory(ctx, req, true)
 	}
+	// Callers with different scopes do not share an answer: the run is
+	// checked against the scope of whoever started it.
 	key := string(keyBytes)
+	if scope, ok := callerScopeOf(ctx); ok {
+		key = scope.Key + "\x00" + key
+	}
 
 	f := &db.memorySearches
 	f.mu.Lock()
