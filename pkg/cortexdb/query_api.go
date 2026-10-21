@@ -309,7 +309,7 @@ func (db *DB) runQueryPrefetch(ctx context.Context, req QueryRequest, prefetch Q
 		if len(entityNames) == 0 {
 			entityNames = req.EntityNames
 		}
-		return db.runGraphQueryPrefetch(ctx, entityNames, limit, prefetch.MaxHops)
+		return db.runGraphQueryPrefetch(ctx, req.Collection, entityNames, limit, prefetch.MaxHops)
 	case QueryPrefetchSource:
 		return db.runQuerySourcePrefetch(ctx, req, prefetch, limit)
 	default:
@@ -317,7 +317,12 @@ func (db *DB) runQueryPrefetch(ctx context.Context, req QueryRequest, prefetch Q
 	}
 }
 
-func (db *DB) runGraphQueryPrefetch(ctx context.Context, entityNames []string, limit int, maxHops int) ([]core.ScoredEmbedding, error) {
+// runGraphQueryPrefetch is the graph lane: the chunks that mention the named
+// entities. Entity nodes are shared by every collection, so a chunk reached
+// through one may sit in another collection than the one queried; with a
+// collection set, the lane keeps only the chunks of that collection, the same
+// check the graph expansion applies to its neighbours (chunksInScope).
+func (db *DB) runGraphQueryPrefetch(ctx context.Context, collection string, entityNames []string, limit int, maxHops int) ([]core.ScoredEmbedding, error) {
 	if len(entityNames) == 0 {
 		return nil, nil
 	}
@@ -332,8 +337,26 @@ func (db *DB) runGraphQueryPrefetch(ctx context.Context, entityNames []string, l
 	if resp == nil || len(resp.Chunks) == 0 {
 		return nil, nil
 	}
-	results := make([]core.ScoredEmbedding, 0, len(resp.Chunks))
-	for _, chunk := range resp.Chunks {
+	chunks := resp.Chunks
+	if collection != "" {
+		ids := make([]string, 0, len(chunks))
+		for _, chunk := range chunks {
+			ids = append(ids, chunk.ID)
+		}
+		inScope, err := db.chunksInScope(ctx, ids, collection, nil)
+		if err != nil {
+			return nil, err
+		}
+		kept := chunks[:0]
+		for _, chunk := range chunks {
+			if _, ok := inScope[chunk.ID]; ok {
+				kept = append(kept, chunk)
+			}
+		}
+		chunks = kept
+	}
+	results := make([]core.ScoredEmbedding, 0, len(chunks))
+	for _, chunk := range chunks {
 		results = append(results, core.ScoredEmbedding{
 			Embedding: core.Embedding{
 				ID:       chunk.ID,
