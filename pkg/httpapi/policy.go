@@ -139,6 +139,9 @@ func authorizeWith(db *cortexdb.DB) func(rr route, next http.HandlerFunc) http.H
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
+			if u, upserts := upsertRoutes[rr.String()]; upserts && !guardUpsert(w, r, db, key.Scope, u) {
+				return
+			}
 			next(w, r)
 		}
 	}

@@ -2,7 +2,6 @@ package rpcserver
 
 import (
 	"context"
-	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -228,7 +227,8 @@ func guardKnowledge(ctx context.Context, db *cortexdb.DB, id string) (record cor
 // allowed. Not-found is therefore success here, not a withholding, which is
 // the one place the two guards differ.
 func guardMemoryUpsert(ctx context.Context, db *cortexdb.DB, id string) error {
-	if strings.TrimSpace(id) == "" {
+	// The facade refuses only an empty id; an id of blanks names a row.
+	if id == "" {
 		return nil
 	}
 	_, _, err := guardMemory(ctx, db, id)
@@ -252,7 +252,7 @@ func guardMemoryUpsert(ctx context.Context, db *cortexdb.DB, id string) error {
 // a collection-confined key could move any document it can name into its own
 // collection.
 func guardKnowledgeUpsert(ctx context.Context, db *cortexdb.DB, id string) error {
-	if strings.TrimSpace(id) == "" {
+	if id == "" {
 		return nil
 	}
 	_, _, err := guardKnowledge(ctx, db, id)
