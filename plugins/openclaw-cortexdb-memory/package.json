@@ -1,6 +1,11 @@
 {
   "name": "cortexdb-openclaw-memory",
-  "version": "2.57.1",
+  "version": "2.57.2",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liliang-cn/cortexdb.git",
+    "directory": "plugins/openclaw-cortexdb-memory"
+  },
   "description": "CortexDB native memory capability for OpenClaw",
   "type": "module",
   "main": "./index.js",

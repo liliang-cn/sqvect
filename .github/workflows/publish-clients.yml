@@ -7,8 +7,9 @@ name: Publish clients
 #
 # crates.io and npm publish through trusted publishing: each registry trusts
 # this workflow of liliang-cn/cortexdb, and the job proves it is that workflow
-# with a GitHub OIDC token. No registry token is stored, so none expires. PyPI
-# still uses the PYPI_API_TOKEN secret.
+# with a GitHub OIDC token, for cortexdb-client and cortexdb-openclaw-memory
+# alike. No registry token is stored, so none expires. PyPI still uses the
+# PYPI_API_TOKEN secret.
 
 on:
   push:
@@ -120,21 +121,21 @@ jobs:
 
   openclaw-memory:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+      # Trusted publishing needs npm 11.5.1 or later.
+      - run: npm install -g npm@latest
       - name: Publish CortexDB OpenClaw memory plugin to npm
         working-directory: plugins/openclaw-cortexdb-memory
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "NPM_TOKEN not set — skipping npm publish"; exit 0
-          fi
           V=$(node -p "require('./package.json').version")
           echo "cortexdb-openclaw-memory version: ${V}"
           if npm view "cortexdb-openclaw-memory@${V}" version >/dev/null 2>&1; then

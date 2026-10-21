@@ -2,7 +2,7 @@
   "id": "cortexdb-memory",
   "name": "CortexDB Memory",
   "description": "Local-first scoped memory, RAG, and graph-aware recall for OpenClaw.",
-  "version": "2.57.1",
+  "version": "2.57.2",
   "kind": "memory",
   "activation": {
     "onStartup": false
