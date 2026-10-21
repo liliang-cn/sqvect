@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.135.0] - 2026-10-21
+
+### Changed
+
+- `cortexdb.WithMemoryOwners` (v2.134.1) is replaced by
+  `cortexdb.WithCallerScope`, which carries a confined caller's memory and
+  knowledge rules and its identity. `authz.Key.CallerContext` builds it; both
+  ports already call that, so a server needs no change.
+
+### Fixed
+
+- A key confined to some user_ids could create a bucket nobody had used yet,
+  the global bucket of a new namespace or a session id another user had not
+  yet opened, and own what unconfined writers saved there later. The global
+  bucket now belongs to nobody whoever writes to it first, a confined key
+  cannot create it, and a save that names a user_id is refused (invalid) in
+  a session another user owns.
+- Identical memory searches that arrive together share one run; a run is no
+  longer shared between callers with different scopes, which handed a
+  narrower key the answer of a wider one.
+- `POST /v1/recall` for a confined key reached the store its scope does not
+  cover: a user-confined key recalled every collection's knowledge, a
+  collection-confined key any user's memories. Each half of a recall now
+  answers only what the key reaches, the rules the typed RPCs apply to rows
+  read by id, and a confined caller gets no graph facts, whose shared edges
+  carry no scope.
+- The graph lane of cortex_query stays in the request's collection (#78).
+
 ## [2.134.1] - 2026-10-20
 
 ### Fixed
