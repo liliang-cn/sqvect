@@ -29,6 +29,12 @@ func scoredTextsToProto(in []core.ScoredEmbedding) []*rpcv1.ScoredText {
 }
 
 func (s *graphragService) InsertGraphDocument(ctx context.Context, req *rpcv1.InsertGraphDocumentRequest) (*rpcv1.InsertGraphDocumentResponse, error) {
+	// The id names a document, as SaveKnowledge's does: without the guard a
+	// collection-confined key could overwrite a document of another
+	// collection and move it into its own.
+	if err := guardKnowledgeUpsert(ctx, s.db, req.GetId()); err != nil {
+		return nil, err
+	}
 	resp, err := s.db.InsertGraphDocument(ctx, cortexdb.GraphRAGDocument{
 		ID:       req.GetId(),
 		Title:    req.GetTitle(),
