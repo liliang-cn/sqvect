@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.135.1] - 2026-10-22
+
+### Fixed
+
+- Over REST, a confined key could overwrite a row of another scope by naming
+  its id on `POST /v1/knowledge` or `POST /v1/memory`, and so move it into
+  its own scope, and could retire another user's memory through
+  `supersedes`. The REST policy now reads the row an upsert names, under
+  every spelling of the id field, and answers a row outside the key's scope
+  as not found, as gRPC does; a supersede target outside the scope, or
+  missing, is refused before anything is written. An id of blanks is now
+  guarded like any other on both ports (#82).
+- `InsertGraphDocument` let a collection-confined key overwrite a document of
+  another collection by id; it now goes through the same guard as
+  `SaveKnowledge` (#83).
+- SQLite's `JSONArrayContains` failed the whole statement on a node whose
+  properties held no JSON, so one such node broke every document deletion
+  (#79).
+- The geo index shared a point's metadata map with callers on the way in and
+  out; every path now copies it (#80).
+- Redeclaring a histogram with different buckets returned the first
+  declaration silently; it now panics like any other conflicting
+  redeclaration (#81).
+
 ## [2.135.0] - 2026-10-21
 
 ### Changed
