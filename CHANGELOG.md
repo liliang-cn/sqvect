@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.136.0] - 2026-10-22
+
+### Added
+
+- A scope-confined key can call the toolbox: `CallTool` over gRPC and
+  `POST /v1/tools/<name>` over REST, which were refused to it outright. An
+  explicit allowlist in `pkg/authz` (one line per tool, closed by default,
+  held complete against the tool definitions by a test) says which tools a
+  confined key may call and classifies every argument: the confined field is
+  forced to the key's value, two-store tools are gated per store, and every
+  argument that names a row by id, nested ones included, is checked against
+  the row, a foreign id answered as missing. Declared entities and relations,
+  engine metadata keys and path retrieval are refused to a confined key
+  (#72, #73, #74).
+
+### Changed
+
+- `memory_save` checks its `supersedes` targets before it writes: a missing
+  or foreign target now leaves no new memory, where it used to store the
+  memory and then report the target missing (#72).
+
 ## [2.135.1] - 2026-10-22
 
 ### Fixed
