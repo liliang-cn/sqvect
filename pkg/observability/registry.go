@@ -96,6 +96,14 @@ type series struct {
 // declare registers a family, or returns the existing one when the declaration
 // is identical. A conflicting redeclaration panics.
 //
+// Identical means the kind, the label names and — for a histogram — the
+// buckets. The buckets belong in that test rather than beside it:
+// DefaultLatencyBuckets above says they are "the one histogram decision that
+// cannot be changed later without discarding recorded history", so a second
+// declaration with different ones cannot be honoured and must not be ignored.
+// Compared after normalisation, so declaring nil against DefaultLatencyBuckets
+// — or the same bounds unsorted — is still identical.
+//
 // Panicking is deliberate, and is the regexp.MustCompile trade: a metric
 // declared twice with different label names is a static bug in the wiring, and
 // the alternatives — a detached handle, or an error every call site ignores —
@@ -118,6 +126,10 @@ func (r *Registry) declare(name, help string, k kind, bounds []float64, labelNam
 		if existing.kind != k || !equalStrings(existing.labelNames, labelNames) {
 			panic(fmt.Sprintf("observability: metric %q already declared as %s%v, redeclared as %s%v",
 				name, existing.kind, existing.labelNames, k, labelNames))
+		}
+		if k == kindHistogram && !equalFloats(existing.bounds, bounds) {
+			panic(fmt.Sprintf("observability: histogram %q already declared with buckets %v, redeclared with %v",
+				name, existing.bounds, bounds))
 		}
 		return existing
 	}
@@ -369,6 +381,20 @@ func (f *atomicFloat) add(delta float64) {
 func (f *atomicFloat) store(v float64) { f.bits.Store(math.Float64bits(v)) }
 
 func (f *atomicFloat) load() float64 { return math.Float64frombits(f.bits.Load()) }
+
+// equalFloats compares normalized bucket bounds. normalizeBuckets has already
+// dropped NaN, so an element never fails to equal itself.
+func equalFloats(a, b []float64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
