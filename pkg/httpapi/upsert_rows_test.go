@@ -247,11 +247,12 @@ func TestAnUnconfinedKeyUpsertsAnyRowOverHTTP(t *testing.T) {
 	srv := newPolicyServer(t, Options{Keys: ks})
 	wantStatus(t, srv, http.MethodPost, "/v1/knowledge", "notes-secret", `{"knowledge_id":"n-1","collection":"notes","content":"A note."}`, http.StatusOK)
 	wantStatus(t, srv, http.MethodPost, "/v1/knowledge", "op-secret", `{"knowledge_id":"n-1","collection":"secrets","content":"moved by the operator"}`, http.StatusOK)
-	// A missing target is the facade's own answer, after the write, as on
-	// main: the guard did not run for this key.
+	// A missing target is the facade's own answer: the guard did not run for
+	// this key. SaveMemory checks its targets before it writes (#72), so the
+	// new memory is not stored either.
 	wantStatus(t, srv, http.MethodPost, "/v1/memory", "op-secret", `{"memory_id":"m-1","user_id":"zeus","scope":"user","content":"x","supersedes":["no-such"]}`, http.StatusNotFound)
-	if st, _ := do(t, srv, http.MethodGet, "/v1/memory?memory_id=m-1", "op-secret", ""); st != http.StatusOK {
-		t.Errorf("the operator's memory is not stored as on main (%d)", st)
+	if st, _ := do(t, srv, http.MethodGet, "/v1/memory?memory_id=m-1", "op-secret", ""); st != http.StatusNotFound {
+		t.Errorf("a save whose supersede target is missing left its memory behind (%d)", st)
 	}
 }
 
