@@ -110,6 +110,12 @@ type Dialect interface {
 	// a containment operator. Neither spelling survives on the other, and the
 	// SQLite one failed on PostgreSQL with "syntax error at end of input" —
 	// an error that names nothing, because the parser gave up at `json_each`.
+	//
+	// Guarded the way JSONTextGuarded is: a column that holds no JSON, or
+	// whose field is not an array, tests false rather than failing the
+	// statement. Document deletion reads entity provenance with this, and one
+	// node written without properties — an empty string in a TEXT column —
+	// failed every deletion in the database with "malformed JSON".
 	JSONArrayContains(column, key string) string
 
 	// AutoIncrementPK is the column definition for a surrogate integer key
@@ -194,9 +200,15 @@ func (sqliteDialect) JSONFlag(column, key string) string {
 		column, column, jsonKey(key))
 }
 
+// Guarded the way JSONEachEntry is, and for the same reason: json_each of
+// anything that is not an array or object raises, and json_extract of a column
+// holding no JSON raises before that. The type test is on the path rather than
+// the column, because the field itself is what json_each is handed — a
+// properties object whose key holds a string would have taken the statement
+// down just as surely as one holding no JSON at all.
 func (sqliteDialect) JSONArrayContains(column, key string) string {
 	return fmt.Sprintf(
-		"EXISTS (SELECT 1 FROM json_each(json_extract(%s, '$.%s')) je WHERE je.value = ?)",
+		"EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(%[1]s) = 1 AND json_type(%[1]s, '$.%[2]s') = 'array' THEN json_extract(%[1]s, '$.%[2]s') ELSE '[]' END) je WHERE je.value = ?)",
 		column, jsonKey(key))
 }
 
