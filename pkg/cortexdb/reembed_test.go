@@ -3,6 +3,7 @@ package cortexdb
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/liliang-cn/cortexdb/v2/internal/encoding"
@@ -243,5 +244,59 @@ func TestReembedWithoutEmbedderIsRefused(t *testing.T) {
 
 	if _, err := db.ReembedMismatchedVectors(context.Background(), ReembedOptions{}); err == nil {
 		t.Error("re-embedding without an embedder was accepted")
+	}
+}
+
+// A repair changes a row's vector and nothing else: the document it belongs
+// to, its metadata and its ACL stay. It used to write back a row read with its
+// id and content alone, so every repaired chunk lost its document, its chunk
+// metadata and who may read it (#84).
+func TestARepairChangesOnlyTheVector(t *testing.T) {
+	db := newReembedDB(t, &fixedDimEmbedder{dim: 8})
+	ctx := context.Background()
+	if _, err := db.SaveKnowledge(ctx, KnowledgeSaveRequest{
+		KnowledgeID: "doc-1", Collection: "kb", Content: "The ledger moves on Sunday.",
+		Metadata: map[string]string{"source": "wiki"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The chunk as an older model left it: a vector of another width, and an
+	// ACL that says who may read it.
+	old := make([]float32, 64)
+	old[0] = 1
+	blob, err := encoding.EncodeVector(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.store.GetDB().ExecContext(ctx,
+		`UPDATE embeddings SET vector = ?, acl = '["team"]' WHERE doc_id = 'doc-1'`, blob); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := db.store.GetDB().QueryRowContext(ctx, `SELECT id FROM embeddings WHERE doc_id = 'doc-1' LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.store.GetByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := db.ReembedMismatchedVectors(ctx, ReembedOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Reembedded != 1 {
+		t.Fatalf("re-embedded %d rows, want 1: %+v", report.Reembedded, report)
+	}
+	after, err := db.store.GetByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.Vector) != 8 {
+		t.Fatalf("vector has %d dimensions after the repair, want 8", len(after.Vector))
+	}
+	if after.DocID != "doc-1" || after.Metadata["source"] != "wiki" ||
+		!reflect.DeepEqual(after.Metadata, before.Metadata) || !reflect.DeepEqual(after.ACL, []string{"team"}) {
+		t.Fatalf("the repair changed the row: doc_id=%q metadata=%v acl=%v, was metadata=%v", after.DocID, after.Metadata, after.ACL, before.Metadata)
 	}
 }

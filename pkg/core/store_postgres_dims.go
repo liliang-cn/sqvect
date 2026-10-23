@@ -16,6 +16,8 @@ package core
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
 )
@@ -128,7 +130,7 @@ func (s *PostgresStore) MismatchedEmbeddings(ctx context.Context, wantDim, limit
 	// the query planner; ordering rows written in the same clock tick is not
 	// part of the contract either way, and a stable answer is easier to test.
 	query := `
-		SELECT e.id, e.content, c.name
+		SELECT e.id, e.content, c.name, e.doc_id, e.metadata, e.acl
 		FROM embeddings e
 		JOIN collections c ON c.id = e.collection_id
 		WHERE e.vector IS NOT NULL
@@ -152,10 +154,22 @@ func (s *PostgresStore) MismatchedEmbeddings(ctx context.Context, wantDim, limit
 	for rows.Next() {
 		var emb Embedding
 		var collection string
-		if err := rows.Scan(&emb.ID, &emb.Content, &collection); err != nil {
+		var docID sql.NullString
+		var metadata, acl []byte
+		if err := rows.Scan(&emb.ID, &emb.Content, &collection, &docID, &metadata, &acl); err != nil {
 			return nil, fmt.Errorf("failed to read mismatched row: %w", err)
 		}
 		emb.Collection = collection
+		emb.DocID = docID.String
+		// Whole rows, as on SQLite: the repair writes each one back with
+		// UpsertBatch. One whose metadata or ACL will not decode stays
+		// mismatched rather than lose them.
+		if len(metadata) > 0 && json.Unmarshal(metadata, &emb.Metadata) != nil {
+			continue
+		}
+		if len(acl) > 0 && json.Unmarshal(acl, &emb.ACL) != nil {
+			continue
+		}
 		stale = append(stale, &emb)
 	}
 	if err := rows.Err(); err != nil {

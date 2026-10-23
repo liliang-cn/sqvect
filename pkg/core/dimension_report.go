@@ -2,8 +2,12 @@ package core
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 	"sort"
+
+	"github.com/liliang-cn/cortexdb/v2/internal/encoding"
 )
 
 // A store outlives the embedding model that filled it. Change models — or point two
@@ -121,12 +125,19 @@ func (s *SQLiteStore) DimensionReport(ctx context.Context) (*DimensionReport, er
 // MismatchedEmbeddings returns rows whose stored vector length differs from wantDim,
 // newest first, capped by limit (limit <= 0 means no cap). Content is included so a
 // caller with an embedder can re-embed it.
+//
+// Each row comes back whole, with its document, metadata and ACL, because the
+// repair writes it back with UpsertBatch, which replaces every column: a row
+// read with its id and content alone came back without the document it
+// belongs to, its chunk metadata and who may read it. A row whose metadata or
+// ACL will not decode is left out, not returned with them empty; it stays
+// mismatched rather than lose them.
 func (s *SQLiteStore) MismatchedEmbeddings(ctx context.Context, wantDim, limit int) ([]*Embedding, error) {
 	if wantDim <= 0 {
 		return nil, fmt.Errorf("target dimension must be positive, got %d", wantDim)
 	}
 	query := `
-		SELECT e.id, e.content, c.name
+		SELECT e.id, e.content, c.name, e.doc_id, e.metadata, e.acl
 		FROM embeddings e
 		JOIN collections c ON c.id = e.collection_id
 		WHERE e.vector IS NOT NULL
@@ -151,10 +162,27 @@ func (s *SQLiteStore) MismatchedEmbeddings(ctx context.Context, wantDim, limit i
 	for rows.Next() {
 		var emb Embedding
 		var collection string
-		if err := rows.Scan(&emb.ID, &emb.Content, &collection); err != nil {
+		var docID, metadataJSON sql.NullString
+		var aclJSON []byte
+		if err := rows.Scan(&emb.ID, &emb.Content, &collection, &docID, &metadataJSON, &aclJSON); err != nil {
 			return nil, fmt.Errorf("failed to read mismatched row: %w", err)
 		}
 		emb.Collection = collection
+		emb.DocID = docID.String
+		if metadataJSON.String != "" {
+			metadata, err := encoding.DecodeMetadata(metadataJSON.String)
+			if err != nil {
+				s.logger.Warn("mismatched row left unrepaired: its metadata does not decode", "id", emb.ID, "error", err)
+				continue
+			}
+			emb.Metadata = metadata
+		}
+		if len(aclJSON) > 0 {
+			if err := json.Unmarshal(aclJSON, &emb.ACL); err != nil {
+				s.logger.Warn("mismatched row left unrepaired: its ACL does not decode", "id", emb.ID, "error", err)
+				continue
+			}
+		}
 		stale = append(stale, &emb)
 	}
 	if err := rows.Err(); err != nil {
