@@ -36,6 +36,11 @@ func (db *DB) searchKnowledgeHybrid(ctx context.Context, query string, opts Grap
 		return lres, nil
 	}
 	if lerr != nil {
+		// Marked as the vector search's own, as fusion would have, so the
+		// knowledge floor reads their cosine.
+		for i := range vres.Chunks {
+			vres.Chunks[i].VectorScore, vres.Chunks[i].VectorRank = vres.Chunks[i].Score, i+1
+		}
 		return vres, nil
 	}
 	base := vres

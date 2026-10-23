@@ -64,6 +64,12 @@ type DB struct {
 	// reviewGate, when set, leaves proposed and rejected rows out of search
 	// and recall; see WithReviewGate in review.go.
 	reviewGate bool
+	// memoryKeywordFloor, knowledgeVectorFloor and knowledgeKeywordFloor are
+	// the minimum a keyword memory hit's coverage, a knowledge chunk's cosine
+	// and a knowledge chunk's coverage must reach; see relevance_floors.go.
+	memoryKeywordFloor    float64
+	knowledgeVectorFloor  float64
+	knowledgeKeywordFloor float64
 	// memorySearches shares one run among identical concurrent memory
 	// searches; see memory_search_coalesce.go.
 	memorySearches memorySearchFlights
@@ -256,6 +262,10 @@ func Open(config Config, opts ...Option) (*DB, error) {
 		graph:       graphStore,
 		dialect:     sqldialect.For(kind),
 		memoryFloor: DefaultMemorySemanticFloor,
+
+		memoryKeywordFloor:    DefaultMemoryKeywordFloor,
+		knowledgeVectorFloor:  DefaultKnowledgeVectorFloor,
+		knowledgeKeywordFloor: DefaultKnowledgeKeywordFloor,
 	}
 
 	// Apply options

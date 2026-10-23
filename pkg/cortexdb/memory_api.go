@@ -709,6 +709,25 @@ func (db *DB) loadMemoryRow(ctx context.Context, memoryID string) (*memoryRow, e
 	return &row, nil
 }
 
+// memoryLexicalPool is how many rows each keyword query may contribute before
+// rescoring, as a multiple of topK and at least memoryLexicalPoolMin. Wider
+// than topK on purpose: the rows are re-ranked by how much of the question
+// they cover (see lexical_rarity.go), and each query's bm25 order is not that.
+// Twice as wide found nothing more on the recall golden set.
+const (
+	memoryLexicalPoolFactor = 4
+	memoryLexicalPoolMin    = 20
+)
+
+// searchMemoryLexical answers a memory search by keyword.
+//
+// Every keyword query — the question, its keywords OR-ed, each alternate
+// query — and, for CJK text, the bigram path contribute candidates; each
+// candidate is then scored once, by the rarity-weighted share of the question
+// it covers (see lexical_rarity.go), with its best bm25 deciding among rows
+// that cover the same. A row that shares only a common word with the question
+// scores next to nothing, and one covering less than the keyword floor is not
+// returned.
 func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, keywords, alternateQueries []string, topK int) ([]MemorySearchHit, error) {
 	queries := lexicalSearchQueries(query, keywords, alternateQueries)
 	if len(queries) == 0 {
@@ -718,15 +737,23 @@ func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, k
 		topK = 5
 	}
 
-	type scoredMemory struct {
+	type candidate struct {
 		record MemoryRecord
-		score  float64
+		bm25   float64 // best bm25 relevance any query gave it, in [0,1)
 	}
-	merged := make(map[string]scoredMemory)
+	candidates := make(map[string]*candidate)
+	consider := func(record MemoryRecord, bm25 float64) {
+		if c, ok := candidates[record.ID]; ok {
+			c.bm25 = max(c.bm25, bm25)
+			return
+		}
+		candidates[record.ID] = &candidate{record: record, bm25: bm25}
+	}
 	var firstErr error
+	pool := max(topK*memoryLexicalPoolFactor, memoryLexicalPoolMin)
 
 	for idx, searchQuery := range queries {
-		lexSQL, lexArgs := memoryLexicalQuery(db.Dialect(), searchQuery, bucketID, topK*4)
+		lexSQL, lexArgs := memoryLexicalQuery(db.Dialect(), searchQuery, bucketID, pool)
 		rows, err := db.query(ctx, lexSQL, lexArgs...)
 		if err != nil {
 			if firstErr == nil {
@@ -769,10 +796,7 @@ func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, k
 			if relevance < 0 {
 				relevance = 0
 			}
-			score := applyMemoryRecallBoosts((relevance/(1+relevance))*scoreWeight, record, time.Now().UTC())
-			if existing, ok := merged[record.ID]; !ok || score > existing.score {
-				merged[record.ID] = scoredMemory{record: record, score: score}
-			}
+			consider(record, (relevance/(1+relevance))*scoreWeight)
 		}
 		if err := rows.Err(); err != nil {
 			_ = rows.Close()
@@ -782,40 +806,57 @@ func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, k
 			return nil, fmt.Errorf("close lexical memory rows: %w", err)
 		}
 	}
-	// A CJK sentence is one token to the word index; see lexical_cjk.go.
-	if core.ContainsCJK(query) {
-		cjk, err := db.searchMemoryCJK(ctx, bucketID, query, topK)
-		if err != nil {
-			log.Printf("cortexdb: cjk bigram memory search skipped: %v", err)
-		}
-		for _, hit := range cjk {
-			if existing, ok := merged[hit.Memory.ID]; !ok || hit.Score > existing.score {
-				merged[hit.Memory.ID] = scoredMemory{record: hit.Memory, score: hit.Score}
-			}
-		}
-	}
-
-	if len(merged) == 0 && firstErr != nil {
+	cjkQuery := core.ContainsCJK(query)
+	if len(candidates) == 0 && !cjkQuery {
 		return nil, firstErr
 	}
 
-	ordered := make([]scoredMemory, 0, len(merged))
-	for _, hit := range merged {
-		ordered = append(ordered, hit)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].score == ordered[j].score {
-			return ordered[i].record.ID < ordered[j].record.ID
+	// One scan of the bucket measures it for the rarity score and for the
+	// bigram path's BM25; the bigram path counts its own bigrams.
+	rq := newRarityQuery(query, append(append([]string{}, keywords...), alternateQueries...))
+	var stats memoryBucketStats
+	if cjkQuery || !rq.empty() {
+		var err error
+		if stats, err = db.memoryBucketStatsFor(ctx, bucketID, rq.patternsBesideBigrams()); err != nil {
+			return nil, err
 		}
-		return ordered[i].score > ordered[j].score
-	})
-	if len(ordered) > topK {
-		ordered = ordered[:topK]
 	}
-
-	results := make([]MemorySearchHit, 0, len(ordered))
-	for _, hit := range ordered {
-		results = append(results, MemorySearchHit{Memory: hit.record, Score: hit.score})
+	// A CJK sentence is one token to the word index; see lexical_cjk.go.
+	if cjkQuery {
+		cjk, err := db.searchMemoryCJK(ctx, bucketID, query, &stats)
+		if err != nil {
+			log.Printf("cortexdb: cjk bigram memory search skipped: %v", err)
+		}
+		for _, c := range cjk {
+			consider(c.record, c.relevance)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, firstErr
+	}
+	scorer := newRarityScorer(rq, stats.df, stats.n)
+	floor := db.memoryKeywordFloor
+	now := time.Now().UTC()
+	results := make([]MemorySearchHit, 0, len(candidates))
+	for _, c := range candidates {
+		match := scorer.coverage(c.record.Content)
+		if !scorer.answers(match, floor) {
+			continue
+		}
+		results = append(results, MemorySearchHit{
+			Memory:   c.record,
+			Score:    applyMemoryRecallBoosts(rarityRelevance(match.share, c.bm25), c.record, now),
+			Coverage: match.share,
+		})
+	}
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score == results[j].Score {
+			return results[i].Memory.ID < results[j].Memory.ID
+		}
+		return results[i].Score > results[j].Score
+	})
+	if len(results) > topK {
+		results = results[:topK]
 	}
 	return results, nil
 }
@@ -1163,13 +1204,27 @@ func mergeMemoryHits(graphHits, lexicalHits []MemorySearchHit, topK int) []Memor
 // The semantic list used to go first and the keyword list only filled what
 // was left, so five vague neighbours always beat an exact match: asking "HA"
 // returned the user's name and city, every one above the 0.31 floor, while the
-// memories about HA came back only to a keyword search. A memory both lists
-// found ranks first; a tie goes to the keyword hit, which names what was asked.
+// memories about HA came back only to a keyword search.
+//
+// A memory both lists found ranks first, whatever its ranks: two retrievers
+// agreeing is the strongest evidence there is. Among the rest a tie goes to
+// the semantic hit. It used to go to the keyword hit, on the theory that it
+// names what was asked; but a keyword hit the semantic search did not return
+// is one it ranked below its own hits or below the floor, and "CortexDB
+// 是什么，能用来做什么" put a memory sharing only 是什么 (rank 1 by keyword)
+// above one about CortexDB (rank 1 by meaning, 0.54). Keyword scores now
+// weigh rarity (see lexical_rarity.go), which is what removed that hit; on
+// the recall golden set the direction of the tie is a wash either way.
+//
+// Going further — every semantic hit ahead of every keyword-only one that
+// does not cover the whole question — cost two labelled answers of 48, so a
+// keyword-only hit still interleaves with the semantic ones by rank.
 // Each hit keeps the score its own search gave it.
 func fuseMemoryHits(semanticHits, lexicalHits []MemorySearchHit, topK int) []MemorySearchHit {
 	type fused struct {
 		hit      MemorySearchHit
 		rrf      float64
+		semantic bool
 		lexical  bool
 		firstPos int
 	}
@@ -1184,10 +1239,14 @@ func fuseMemoryHits(semanticHits, lexicalHits []MemorySearchHit, topK int) []Mem
 				order = append(order, f)
 			} else {
 				f.hit.Via = unionVia(f.hit.Via, hit.Via)
+				f.hit.Coverage = max(f.hit.Coverage, hit.Coverage)
+				f.hit.Similarity = max(f.hit.Similarity, hit.Similarity)
 			}
 			f.rrf += 1.0 / (hybridRRFK + float64(rank+1))
 			if lexical {
 				f.lexical = true
+			} else {
+				f.semantic = true
 			}
 		}
 	}
@@ -1195,11 +1254,14 @@ func fuseMemoryHits(semanticHits, lexicalHits []MemorySearchHit, topK int) []Mem
 	add(lexicalHits, true)
 	sort.SliceStable(order, func(i, j int) bool {
 		a, b := order[i], order[j]
+		if ab, bb := a.semantic && a.lexical, b.semantic && b.lexical; ab != bb {
+			return ab
+		}
 		if a.rrf != b.rrf {
 			return a.rrf > b.rrf
 		}
-		if a.lexical != b.lexical {
-			return a.lexical
+		if a.semantic != b.semantic {
+			return a.semantic
 		}
 		return a.firstPos < b.firstPos
 	})

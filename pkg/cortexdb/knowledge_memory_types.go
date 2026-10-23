@@ -319,6 +319,11 @@ type MemorySearchHit struct {
 	// search found the hit. Score orders the list, Similarity is the number
 	// that says how close the memory actually is.
 	Similarity float64 `json:"similarity,omitempty"`
+	// Coverage is the share of the question a keyword hit contains, each
+	// term weighted by how rare it is in the store (see lexical_rarity.go);
+	// zero when keyword search did not find the hit. It is to a keyword hit
+	// what Similarity is to a semantic one.
+	Coverage float64 `json:"coverage,omitempty"`
 	// Via names the retrievers that found the memory: "semantic", "keyword",
 	// "graph". A recall that fused several says which one each hit owes its
 	// place to, so a person can tell a close meaning from a shared word.

@@ -29,8 +29,10 @@ func runMemoryRoundTrip(t *testing.T, withEmbedder bool) {
 		t.Fatal("metadata round-trip failed")
 	}
 
+	// Two words of the memory's own: a keyword search no longer returns a
+	// memory that shares one word of a question of several.
 	res, err := client.SearchMemory(ctx, &rpcv1.SearchMemoryRequest{
-		Query: "coffee preference", UserId: "u1", Scope: "user", TopK: 3,
+		Query: "roast coffee preference", UserId: "u1", Scope: "user", TopK: 3,
 	})
 	if err != nil || len(res.GetResults()) == 0 {
 		t.Fatalf("search: %v n=%d", err, len(res.GetResults()))

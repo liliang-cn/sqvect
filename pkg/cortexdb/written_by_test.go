@@ -103,14 +103,16 @@ func TestAMemoryHitSaysWhichRetrieverFoundItAndHowCloseItIs(t *testing.T) {
 	ctx := context.Background()
 	for id, content := range map[string]string{
 		"close": "alpha bravo",
-		"word":  "charlie zulu",
+		// Two of the question's words: one shared word is not a keyword
+		// answer to a question of several (see rarityScorer.answers).
+		"word": "charlie zulu yankee",
 	} {
 		if _, err := db.SaveMemory(ctx, MemorySaveRequest{MemoryID: id, Scope: "global", Content: content}); err != nil {
 			t.Fatalf("save %s: %v", id, err)
 		}
 	}
 
-	resp, err := db.SearchMemory(ctx, MemorySearchRequest{Query: "alpha zulu", Scope: "global", TopK: 5})
+	resp, err := db.SearchMemory(ctx, MemorySearchRequest{Query: "alpha zulu yankee", Scope: "global", TopK: 5})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}

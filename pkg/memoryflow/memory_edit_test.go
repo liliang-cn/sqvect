@@ -200,7 +200,9 @@ func TestProposeLeavesRetiredMemoriesOutOfTheCandidates(t *testing.T) {
 	}
 
 	llm := &stubLLM{reply: `{"edits":[]}`}
-	if _, err := ProposeMemoryEdits(ctx, db, "node-e 到底在哪台宿主机上", llm, MemoryEditOptions{}); err != nil {
+	// Names the host as well as the node: a keyword search no longer offers a
+	// memory that shares one word of a question of several.
+	if _, err := ProposeMemoryEdits(ctx, db, "node-e 到底在哪台宿主机上，hp 还是 dell", llm, MemoryEditOptions{}); err != nil {
 		t.Fatalf("propose: %v", err)
 	}
 	if strings.Contains(llm.sawUser, "id=gone") {

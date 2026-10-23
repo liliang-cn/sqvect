@@ -77,8 +77,9 @@ func TestSearchHitsCarryRankAndComponentScores(t *testing.T) {
 	ctx := context.Background()
 
 	for id, body := range map[string]string{
-		"rb-quorum": "A replica set with quorum refuses writes when it loses its majority.",
-		"rb-pool":   "A thin pool that fills up fails every backup volume in it at once.",
+		"rb-quorum":  "A replica set with quorum refuses writes when it loses its majority.",
+		"rb-replica": "A replica that rejoins catches up from the majority.",
+		"rb-pool":    "A thin pool that fills up fails every backup volume in it at once.",
 	} {
 		if _, err := db.SaveKnowledge(ctx, KnowledgeSaveRequest{
 			KnowledgeID: id, Content: body, Collection: "rb",
@@ -93,8 +94,15 @@ func TestSearchHitsCarryRankAndComponentScores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if len(hits.Results) < 2 {
-		t.Fatalf("expected both notes, got %d", len(hits.Results))
+	// Both notes about replicas; not the one about pools, which shares neither
+	// a word nor a direction with the question and used to fill the list.
+	if len(hits.Results) != 2 {
+		t.Fatalf("expected the two replica notes, got %d", len(hits.Results))
+	}
+	for _, hit := range hits.Results {
+		if hit.KnowledgeID == "rb-pool" {
+			t.Fatalf("the unrelated note filled the list: %+v", hits.Results)
+		}
 	}
 	for i, hit := range hits.Results {
 		if hit.Rank != i+1 {

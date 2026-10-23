@@ -35,6 +35,9 @@ import (
 //	CORTEXDB_MEMORY_SEMANTIC_FLOOR             cosine below which a semantic memory
 //	                                           hit is noise (default calibrated on
 //	                                           embeddinggemma; other models differ)
+//	CORTEXDB_MEMORY_KEYWORD_FLOOR              rarity-weighted coverage a keyword
+//	CORTEXDB_KNOWLEDGE_VECTOR_FLOOR            memory hit, the cosine and coverage
+//	CORTEXDB_KNOWLEDGE_KEYWORD_FLOOR           a knowledge chunk must reach (0 = off)
 func openBrainDB(dbPath string) (*cortexdb.DB, error) {
 	var opts []cortexdb.Option
 	baseURL := firstEnv("CORTEXDB_EMBED_BASE_URL", "OPENAI_BASE_URL")
@@ -64,6 +67,11 @@ func openBrainDB(dbPath string) (*cortexdb.DB, error) {
 			opts = append(opts, cortexdb.WithReviewGate())
 		}
 	}
+	floors, err := cortexdb.RelevanceFloorOptionsFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, floors...)
 	if qt := newQueryTransformer(); qt != nil {
 		opts = append(opts, cortexdb.WithQueryTransformer(qt))
 	}

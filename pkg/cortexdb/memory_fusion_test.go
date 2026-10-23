@@ -84,8 +84,9 @@ func TestFuseMemoryHitsRanksByReciprocalRank(t *testing.T) {
 	for _, h := range fuseMemoryHits(semantic, lexical, 4) {
 		got = append(got, h.Memory.ID)
 	}
-	// "both" is on both lists; a tie between two first places goes to the keyword hit.
-	if want := "both l1 s1 l2"; strings.Join(got, " ") != want {
+	// "both" is on both lists and goes first; a tie between two first places
+	// goes to the semantic hit, which the keyword hit's own search did not beat.
+	if want := "both s1 l1 l2"; strings.Join(got, " ") != want {
 		t.Fatalf("fused order %v, want %s", got, want)
 	}
 }

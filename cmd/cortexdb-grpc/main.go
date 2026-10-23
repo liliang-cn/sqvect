@@ -119,6 +119,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	floors, err := cortexdb.RelevanceFloorOptionsFromEnv()
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+	opts = append(opts, floors...)
 
 	db, err := cortexdb.Open(cortexdb.DefaultConfig(*dbPath), opts...)
 	if err != nil {

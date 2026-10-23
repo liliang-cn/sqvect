@@ -7,7 +7,6 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -49,6 +48,11 @@ import (
 //
 // It is the same arithmetic on both backends: the SQL is a substring filter,
 // and the ranking happens here.
+//
+// Memory search takes every candidate from here and scores it against the
+// whole question, its non-CJK words too, weighting each term by its rarity
+// (see lexical_rarity.go); the more-than-one-word rule below holds there in
+// the same form. Knowledge search uses this ranking as it is.
 
 // A row is returned only if what it covers of the query is more than one word:
 // two separate stretches of it, or one stretch of at least cjkMinSpan
@@ -201,14 +205,32 @@ type cjkScored struct {
 	index    int
 	score    float64
 	coverage float64
+	enough   bool // covers enough of the query to be returned (see cjkMinSpan)
 }
 
 // scoreCJKCandidates ranks candidates against the query with BM25 and drops
 // those that do not cover enough of it (see cjkMinCovered). corpusSize and
 // avgLen describe the whole searchable set, not just the candidates.
 func scoreCJKCandidates(q cjkQuery, contents []string, corpusSize int, avgLen float64) []cjkScored {
+	all, _ := scoreCJKAll(q, contents, corpusSize, avgLen)
+	out := all[:0]
+	for _, s := range all {
+		if s.enough {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// scoreCJKAll is scoreCJKCandidates without the floor: every candidate, with
+// whether it covers enough of the query to pass it. Memory search weighs
+// coverage by rarity instead (see lexical_rarity.go) and keeps the BM25 here
+// to order rows that cover the same. It also returns each term's document
+// frequency among the candidates, which is its frequency in the corpus when
+// the candidates are every row containing any term.
+func scoreCJKAll(q cjkQuery, contents []string, corpusSize int, avgLen float64) ([]cjkScored, []int) {
 	if len(q.terms) == 0 || len(contents) == 0 || q.chars == 0 {
-		return nil
+		return nil, nil
 	}
 	if corpusSize < len(contents) {
 		corpusSize = len(contents)
@@ -266,13 +288,11 @@ func scoreCJKCandidates(q cjkQuery, contents []string, corpusSize int, avgLen fl
 		}
 		coverage := float64(hit) / float64(q.chars)
 		moreThanOneWord := spans >= 2 || longest >= cjkMinSpan || hit == q.chars
-		if coverage < cjkMinCoverage || !moreThanOneWord {
-			continue
-		}
-		out = append(out, cjkScored{index: d, score: score, coverage: coverage})
+		enough := coverage >= cjkMinCoverage && moreThanOneWord
+		out = append(out, cjkScored{index: d, score: score, coverage: coverage, enough: enough})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].score > out[j].score })
-	return out
+	return out, df
 }
 
 // cjkRelevance maps a BM25 score onto [0,1) the way the other lexical paths map
@@ -294,20 +314,30 @@ func cjkLikeClause(column string, terms []string) (string, []any) {
 	return "(" + strings.Join(parts, " OR ") + ")", args
 }
 
-// searchMemoryCJK is the bigram path for memories in one bucket.
-func (db *DB) searchMemoryCJK(ctx context.Context, bucketID, query string, topK int) ([]MemorySearchHit, error) {
+// cjkMemoryCandidate is a memory the bigram path found, with its bigram BM25
+// mapped onto [0,1) and whether it covers enough of the query by the bigram
+// rule (see cjkMinSpan).
+type cjkMemoryCandidate struct {
+	record    MemoryRecord
+	relevance float64
+	enough    bool
+}
+
+// searchMemoryCJK is the bigram path for memories in one bucket. It returns
+// every memory that contains a bigram of the query, best first: the caller
+// weighs them by how much of the whole question they cover, its non-CJK
+// words included, which this path does not see.
+//
+// stats describes the bucket (see memoryBucketStats); the document frequency
+// of each bigram, counted over the candidates, is added to it. The candidates
+// are every row containing a bigram, so the counts are exact below
+// cjkMaxCandidates, and they save the bucket scan a LIKE per bigram.
+func (db *DB) searchMemoryCJK(ctx context.Context, bucketID, query string, stats *memoryBucketStats) ([]cjkMemoryCandidate, error) {
 	q := cjkQueryTerms(query)
 	if len(q.terms) == 0 {
 		return nil, nil
 	}
-
-	var corpusSize int
-	var avgLen float64
-	if err := db.queryRow(ctx,
-		`SELECT COUNT(*), COALESCE(AVG(LENGTH(content)), 0) FROM messages WHERE session_id = ?`,
-		bucketID).Scan(&corpusSize, &avgLen); err != nil {
-		return nil, fmt.Errorf("measure memory bucket: %w", err)
-	}
+	corpusSize, avgLen := stats.n, stats.avgLen
 	if corpusSize == 0 {
 		return nil, nil
 	}
@@ -351,17 +381,15 @@ func (db *DB) searchMemoryCJK(ctx context.Context, bucketID, query string, topK 
 		return nil, fmt.Errorf("iterate cjk memory rows: %w", err)
 	}
 
-	scored := scoreCJKCandidates(q, contents, corpusSize, avgLen)
-	if len(scored) > topK*4 {
-		scored = scored[:topK*4]
+	scored, df := scoreCJKAll(q, contents, corpusSize, avgLen)
+	for t, n := range df {
+		stats.df[q.terms[t]] = n
 	}
-	now := time.Now().UTC()
-	hits := make([]MemorySearchHit, 0, len(scored))
+	out := make([]cjkMemoryCandidate, 0, len(scored))
 	for _, s := range scored {
-		record := records[s.index]
-		hits = append(hits, MemorySearchHit{Memory: record, Score: applyMemoryRecallBoosts(cjkRelevance(s), record, now)})
+		out = append(out, cjkMemoryCandidate{record: records[s.index], relevance: cjkRelevance(s), enough: s.enough})
 	}
-	return hits, nil
+	return out, nil
 }
 
 // searchTextCJK is the bigram path for knowledge chunks. It returns rows in the

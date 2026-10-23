@@ -343,6 +343,15 @@ func (db *DB) SearchKnowledge(ctx context.Context, req KnowledgeSearchRequest) (
 	if err != nil {
 		return nil, err
 	}
+	// PPR is left alone. A walk reaches passages that share no word with the
+	// question — the second hop of a multi-hop question is one — and the
+	// multi-hop benchmarks a floor there would have to be measured on were
+	// not at hand.
+	if resolution.Decision.EffectiveMode != RetrievalModePPR {
+		if err := db.applyKnowledgeFloors(ctx, result, resolution.Plan, resolution.Decision, opts.Collection, opts); err != nil {
+			return nil, err
+		}
+	}
 
 	hits, err := db.aggregateKnowledgeHits(ctx, result.Chunks)
 	if err != nil {
