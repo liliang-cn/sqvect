@@ -16,7 +16,7 @@ Use CortexDB when you want an agent memory layer that is embedded, inspectable, 
 | Fuseki, GraphDB, Stardog, or a standalone graph DB | Enough RDF/SPARQL/RDFS/SHACL for local-first agent workflows, next to the text and memory store | Not a full enterprise RDF server |
 | Custom memory tables for Claude Code/Codex | A packaged plugin, MCP server, auto-recall path, and reusable memory/KG tools | Bring your own product-specific memory policy |
 
-Planning a launch or community post? See [docs/LAUNCH_KIT.md](docs/LAUNCH_KIT.md) for ready-to-edit Show HN, Reddit, and demo scripts.
+Planning a launch or community post? See [docs/LAUNCH_KIT.md](LAUNCH_KIT.md) for ready-to-edit Show HN, Reddit, and demo scripts.
 
 ## Feature reference
 
@@ -29,7 +29,7 @@ Planning a launch or community post? See [docs/LAUNCH_KIT.md](docs/LAUNCH_KIT.md
 - **Knowledge graph** — RDF triples/quads on the same file, **and the property graph readable as RDF**: everything extraction and `upsert_entities` write answers SPARQL, inference and SHACL as read-only triples (`cxn:` nodes, `cxt:` types, `cxr:` relations, `cxp:` properties) with no copy to keep in sync. **RDF 1.2**: triple terms `<<( s p o )>>`, reified triples and `{| |}` annotations, so a statement about a fact — who said it, how sure — is itself queryable; base-directed literals. SPARQL 1.1 and 1.2 — queries, updates with graph management (`ADD`/`COPY`/`MOVE`/`CLEAR`/`DROP`), every property path, results as JSON/XML/CSV/TSV, and `SERVICE` through a handler the application sets — passing the W3C test suites on both backends: RDF 1.2 and RDF/XML in full, SPARQL 1.2 269/269, SPARQL 1.1 query 329/331 (the two are a deliberate leniency: `"1" + "2"` is 3), update 157/157, results formats and federation in full. Semi-naive materialized inference over RDFS and the OWL 2 RL rules — `inverseOf`, symmetric, transitive, `equivalentClass`/`equivalentProperty`, `sameAs`, **keys** (`FunctionalProperty` / `InverseFunctionalProperty` / `hasKey` derive `sameAs`: the same e-mail is the same person), **property chains**, and class expressions (`someValuesFrom`, `allValuesFrom`, `hasValue`, `intersectionOf`, `unionOf`, `oneOf`, max cardinality) — kept current **automatically** as facts change (delete-and-rederive, asynchronous, `WaitForInference` to read your own writes), every inferred triple explainable. Contradictions (`disjointWith` and `AllDisjointClasses`, disjoint properties, two values of a functional property, `differentFrom` and `AllDifferent` against a derived `sameAs`, irreflexive and asymmetric properties, negative property assertions, `complementOf`, `owl:Nothing`, a cardinality of 0) are reported with the conflicting triples, never resolved by guessing. **SHACL Core in full** — every property path, qualified value shapes, `sh:lessThan`, implicit class targets; the W3C Core suite passes 98/98 — and **SHACL-SPARQL** (`sh:sparql` constraints and SPARQL-based constraint components, with pre-binding; 21 of 22, the optional `$shapesGraph` aside), and **SHACL-AF rules** (`sh:TripleRule` with conditions, order and node expressions, run to a fixpoint, results explainable). **Read-only Cypher / GQL** over the property graph (`graph_cypher_query`: MATCH / OPTIONAL MATCH / WITH / variable-length paths up to 6 hops / aggregation; 0 wrong answers across 3,897 openCypher TCK scenarios — what it cannot do, it refuses). N-Triples/N-Quads/Turtle/TriG/JSON-LD I/O and RDF/XML import (how most OWL ontologies are published), where JSON-LD never fetches a remote context; property-graph `apply_inference` materializes two-hop relation compositions with provenance; entities track asserting documents, and `delete_document_graph` is deletion shaped like ingest.
 - **Ontology (Palantir-style)** — typed object/link/interface types with primary keys and cardinality, an object-set algebra (union / intersect / filter / `search_around`), governed **action types** with audit trail, generated typed agent tools, and a breaking-change schema diff; `strict` or `vocabulary` enforcement.
 - **Pipelines** — `memoryflow` (transcript → recall → wake-up → promotion), `graphflow` (corpus → graph → HTML report), `importflow` (CSV / SQL dumps / live Postgres-MySQL → RAG + KG), `connector` (PII masking, signed plans, reversible vault, CDC sync).
-- **Tools & MCP** — 80+ tools with the same names in-process and over MCP, plus `render_graph_html`, an interactive graph view, `serve_graph_3d`, a live 3D view you can search across the whole store, ask, query with Cypher and expand node by node (read-only, phone-friendly, every view a shareable link: `?focus=`, `?ask=`, `?cypher=`) or walk as a library of memories shelved by project, `import_agent_memory`, which brings in what Claude Code and Codex already remember (memory notes, `CLAUDE.md` / `AGENTS.md`, Codex's memories, and past sessions distilled on request), and paged bulk listings (`memory_list_all`, `graph_list_all`) — `graph_list_all` defaults to the most-connected core; `order: "id"` walks the whole graph instead, returning `next_cursor` page by page like `memory_list_all` does.
+- **Tools & MCP** — 100+ tools with the same names in-process and over MCP, plus `render_graph_html`, an interactive graph view, `serve_graph_3d`, a live 3D view you can search across the whole store, ask, query with Cypher and expand node by node (read-only, phone-friendly, every view a shareable link: `?focus=`, `?ask=`, `?cypher=`) or walk as a library of memories shelved by project, `import_agent_memory`, which brings in what Claude Code and Codex already remember (memory notes, `CLAUDE.md` / `AGENTS.md`, Codex's memories, and past sessions distilled on request), and paged bulk listings (`memory_list_all`, `graph_list_all`) — `graph_list_all` defaults to the most-connected core; `order: "id"` walks the whole graph instead, returning `next_cursor` page by page like `memory_list_all` does.
 - **Questions about the whole store** — retrieval says what is relevant to a query; these say what is there. A *range* search returns everything within a distance of the query and nothing outside it, which is the honest answer when a top-K would invent a K (`search_vector_range`, and the response says when a cap hid matches). `Aggregate` counts, sums and groups by a metadata field (`aggregate_metadata`). And `VectorAggregate` reduces the vectors themselves — centroid, geometric median, and the **medoid**, the stored record closest to all the others in its group, which answers "which of these near-duplicates is canonical" and "what is this cluster about" arithmetically, with no model in the loop (`representative_records`). All identical on both backends, with one test body per behaviour run against each.
 - **The graph describing itself** — `graph_schema` reports the *observed* schema (which node and edge types exist, which type pairs each edge really connects, which property keys each type carries) and `graph_property_values` reports what values a key actually takes, because a filter written from a key's name — `color == "black"` against rows that say `BLK` — returns nothing and reads as a fact. A declared ontology is opt-in and absent on exactly the graphs whose shape nobody knows; this is measured from the rows, and comes with a rendered form meant to be pasted into a prompt. Alongside them `rank_graph_nodes` (what the brain is structurally about — cached with its computation time and recomputed only when the graph changed), `graph_statistics` (a component count far above 1 means entities were written and never linked), `graph_health` (growth spikes per producer, hub nodes in the degree tail, supersession churn per day, and single-valued links holding two values at once) and `predict_graph_edges` (a missing fact, or one entity stored twice).
 - **Whole-corpus questions** — `global_search` is GraphRAG global search as a tool the caller chooses: `build_community_hierarchy` runs Leiden — every community connected at every level, which Louvain does not guarantee — with every level kept and writes community reports bottom-up, and `global_search` map-reduces over the reports of the `level` asked for. Works with a model, and without one (deterministic reports, lexically ranked, unsynthesised).
@@ -75,7 +75,7 @@ pkg/core       Storage engine (SQLite by default, PostgreSQL + pgvector by DSN),
                vector indexes (HNSW/IVF/Flat).
 ```
 
-Supporting packages: `pkg/eval` (retrieval-quality harness), `pkg/rpcserver` (the gRPC facade behind `cmd/cortexdb-grpc`), `pkg/agentmem` + `pkg/hindsight` (a standalone SQL-backed agent memory bank with disposition-weighted reflection), `pkg/semantic-router` (embedding-based query routing), `pkg/quantization` (scalar/binary vector compression), `pkg/geo` (geospatial indexing).
+Supporting packages: `pkg/eval` (retrieval-quality harness), `pkg/rpcserver` (the gRPC facade behind `cmd/cortexdb-grpc`), `pkg/agentmem` + `pkg/hindsight` (a standalone SQL-backed agent memory bank with disposition-weighted reflection), `pkg/semantic-router` (query routing: embedding-based, sparse/lexical, or hybrid), `pkg/quantization` (scalar/binary vector compression), `pkg/geo` (geospatial indexing).
 
 ## Storage backends — SQLite or PostgreSQL
 
@@ -86,7 +86,7 @@ same brain runs on PostgreSQL + pgvector. The DSN is the whole switch:
 
 ```go
 db, _ := cortexdb.Open(cortexdb.DefaultConfig("/var/lib/cortexdb/brain.db"))          // SQLite
-db, _ := cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"))    // PostgreSQL + pgvector
+db, _ = cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"))     // or PostgreSQL + pgvector
 ```
 
 A bare path has always meant a SQLite file, so it still does — an existing
@@ -139,9 +139,12 @@ CORTEXDB_TEST_POSTGRES="postgres://postgres:cortex@127.0.0.1:43516/cortex?sslmod
   go test ./...
 ```
 
-That turns on **104 PostgreSQL tests** across `pkg/core`, `pkg/graph`,
-`pkg/cortexdb` and `pkg/agentmem`; without the variable the same run prints 59
-explicit skips naming what is not covered. Most of them are parity tests: one
+That turns on the PostgreSQL tests in `pkg/core`, `pkg/graph`, `pkg/cortexdb`,
+`pkg/agentmem`, `pkg/graphflow`, `pkg/sqldialect` and `internal/pgtest`; without
+the variable the same run skips them explicitly, naming what is not covered.
+(`pkg/connector`'s PostgreSQL and MySQL source/CDC tests take their own DSNs,
+`CONNECTOR_PG_DSN`, `CONNECTOR_PG_REPL_DSN` and the `CONNECTOR_MYSQL_*` ones.)
+Most of them are parity tests: one
 body, run against both databases, asserting they answer the same. That is the
 guard that matters, because the failure mode here is silent — portable SQL that
 still parses and still returns rows, just not the right ones.
@@ -162,7 +165,7 @@ accessors) and leaves the SQL text in place — it is dialect adaptation, not a
 query builder, and it does not reach as far as Cypher.
 
 If you want a graph database's query language over this data, export to it —
-`knowledge_graph_export` emits N-Triples/Turtle/TriG — and keep CortexDB as the
+`knowledge_graph_export` emits N-Triples/N-Quads/Turtle/TriG/JSON-LD — and keep CortexDB as the
 system of record.
 
 ### The seam that does fit: external retrieval lanes
@@ -224,7 +227,7 @@ fmt.Println(rec.ContextPack.Text) // sections + memory/knowledge/chunk IDs + ent
 - **`ExpandEntityContext` / `Neighbors` / `ShortestPath`** — graph exploration around entities.
 - **`extract_conversation`** — deterministic (no-LLM) extraction of entities, co-occurrence relations, and a summary from a conversation transcript or stored session; `persist` writes them into the KG and durable knowledge.
 
-`MemorySaveRequest` can carry `entities`/`relations` inline, so an agent-written memory lands in the graph in the same call that stores it. Everything above is also exposed as `knowledge_memory_*` MCP tools.
+`MemorySaveRequest` can carry `entities`/`relations` inline, so an agent-written memory lands in the graph in the same call that stores it. Everything above is also exposed as MCP tools: the `knowledge_memory_*` family plus `extract_conversation`.
 
 ## Composable retrieval
 
@@ -350,7 +353,7 @@ GraphRAG entities carry provenance: `upsert_entities` records every asserting do
 
 ## Ontology
 
-CortexDB models a Palantir-style ontology on the same file: typed object types with a mandatory primary key, link types with per-side cardinality, interfaces for polymorphic retrieval, a composable object set algebra, and governed writes through action types. Runnable end to end in [`examples/16_ontology`](examples/16_ontology).
+CortexDB models a Palantir-style ontology on the same file: typed object types with a mandatory primary key, link types with per-side cardinality, interfaces for polymorphic retrieval, a composable object set algebra, and governed writes through action types. Runnable end to end in [`examples/16_ontology`](../examples/16_ontology).
 
 ```go
 _, err := db.SaveOntologySchema(ctx, cortexdb.OntologySaveRequest{
@@ -415,7 +418,7 @@ diff, err := db.DiffOntologySchema(ctx, cortexdb.OntologyDiffRequest{SchemaID: "
 
 Breaking: a removed object or link type, a removed property, a changed property data type, a property that became required, a new required property, a changed primary key, a retargeted link side, and a cardinality tightened from `MANY` to `ONE`. Non-breaking additions and relaxations are reported too, flagged as safe. Both sides are expanded through their shared properties first, so retyping a shared property is visible.
 
-Tools: `ontology_save`, `ontology_get`, `ontology_list`, `ontology_delete`, `ontology_diff`, `ontology_action_list`, `ontology_action_apply`, `object_set_resolve`.
+Tools: `ontology_save`, `ontology_get`, `ontology_list`, `ontology_delete`, `ontology_diff`, `ontology_draft`, `ontology_action_list`, `ontology_action_apply`, `object_set_resolve`.
 
 ### Current limitations
 
@@ -431,7 +434,7 @@ tools := db.GraphRAGTools()                             // in-process tool calli
 server := db.NewMCPServer(cortexdb.MCPServerOptions{})  // MCP server
 ```
 
-Tool groups (80+ tools, same names in-process and over MCP): GraphRAG (`ingest_document`, `search_text`, `build_context`, `expand_graph`, `search_paths`, `find_nodes`, `delete_document_graph`), unified retrieval (`cortex_query`), knowledge/memory (`knowledge_save`, `memory_search`, …), KnowledgeMemory (`knowledge_memory_recall`, `_reflect`, `_consolidate`, `extract_conversation`), KG (`knowledge_graph_query`, `_shacl_validate`, `apply_inference`), ontology (`ontology_save`, `ontology_action_apply`, `object_set_resolve`), and maintenance (`vector_dimension_repair`, `sweep_expired`). The MCP server adds `render_graph_html`, an interactive knowledge-graph view. `memoryflow`/`graphflow`/`importflow`/`connector` expose their own toolboxes too.
+Tool groups (100+ tools, same names in-process and over MCP): GraphRAG (`ingest_document`, `search_text`, `build_context`, `expand_graph`, `search_paths`, `find_nodes`, `delete_document_graph`), unified retrieval (`cortex_query`), knowledge/memory (`knowledge_save`, `memory_search`, …), KnowledgeMemory (`knowledge_memory_recall`, `_reflect`, `_consolidate`, `extract_conversation`), KG (`knowledge_graph_query`, `_shacl_validate`, `apply_inference`), ontology (`ontology_save`, `ontology_action_apply`, `object_set_resolve`), and maintenance (`vector_dimension_repair`, `sweep_expired`). The `cortexdb-mcp-stdio` binary adds `render_graph_html` (an interactive knowledge-graph view), `serve_graph_3d`, `side_graph_*`, `import_agent_memory`, and in local mode `global_search` / `build_community_hierarchy`; `db.NewMCPServer` serves the facade's tools only. `memoryflow`/`graphflow`/`importflow`/`connector` expose their own toolboxes too.
 
 ### Expiry and the sweep
 
@@ -450,6 +453,10 @@ document (record, chunks, graph nodes) and every expired memory, each checked
 again just before its delete, so a row renewed after the listing is kept. With
 `CORTEXDB_REMOTE` set, the command sweeps the shared brain through the tool.
 `sweep_expired` is a write tool: any read-write key can run it.
+
+If the store used the metadata keys `_expires_at` or `_review_status` before
+upgrading, run `--sweep-expired --dry-run` before the first real sweep to see
+what it would delete.
 
 ### Review status and the review gate
 
@@ -548,10 +555,14 @@ auto-recall hook follows the same remote, so injected memories come from the
 same brain the tools write to, as do `--memory-html` and `--export-memory`.
 
 Transport is plaintext by design — run it over loopback, a trusted LAN, or
-Tailscale. **The token is the access control**: anyone holding it has full
-read/write access. Embedder and LLM settings live on the server, not the
-clients. `--graph-html` reads the shared brain too; the remaining one-shot modes
-(`--export-memory`, `--learn-path`) still act on a local database.
+Tailscale, or publish it as `https://host` behind a TLS-terminating proxy.
+With a single token, **the token is the access control**: anyone holding it has
+full read/write access. For finer control, give the server a key file
+(`CORTEXDB_KEY_FILE` or `-keys`): each key is `read-only` or `read-write` and can
+be confined to user ids, memory scopes, namespaces and collections. Embedder and
+LLM settings live on the server, not the clients. `--graph-html` and
+`--export-memory` read the shared brain too; `--learn-path` still acts on a
+local database.
 
 Running it by hand is fine for a trial; to keep it up, [`deploy/`](../deploy/)
 has a hardened systemd unit, a container image whose healthcheck is the server
@@ -560,9 +571,10 @@ upgrade and port-override notes that go with them. Every port has a default and
 every default is overridable: `CORTEXDB_GRPC_ADDR` (or `-addr`) moves the
 server, `CORTEXDB_LIVE_PORT` moves the live graph view.
 
-The graph view is also an MCP tool, `render_graph_html`. It is the one tool that
-is **not** proxied to the shared brain: the graph is read remotely, but the HTML
-is rendered and written where the MCP server runs, because the caller needs the
+The graph view is also an MCP tool, `render_graph_html`. It is one of the few
+tools that are **not** proxied to the shared brain — with `serve_graph_3d`,
+`side_graph_*` and `import_agent_memory`, it runs where the MCP server runs. The
+graph is read remotely, but the HTML is rendered and written locally, because the caller needs the
 file on its own filesystem to open or attach it — a server-side render would
 land it on the brain's host, out of reach of whatever asked. Set
 `CORTEXDB_VIEW_DIR` to choose where renders go.
@@ -591,7 +603,7 @@ hermes gateway restart
 ```
 
 Run `cortexdb-grpc`, then install the adapter. The existing
-[`skills/`](skills/) remain useful for explicit tool instructions and helper
+[`skills/`](../skills/) remain useful for explicit tool instructions and helper
 functions, but a skill alone does not replace the host agent's native memory
 backend.
 
@@ -611,6 +623,6 @@ Retrieval quality is measured, not assumed: `pkg/eval` runs a labeled query set 
 
 ## Examples & Status
 
-`examples/01_core` … `16_ontology` are small and architecture-oriented (`go run ./examples/01_core`); 01-07/09/15/16 run standalone, others need an LLM/embeddings/live DB — see [examples/README.md](examples/README.md).
+`examples/01_core` … `19_execution_graph` are small and architecture-oriented (`go run ./examples/01_core`); 01-07/09/15/16/18/19 run standalone, others need an LLM/embeddings/live DB — see [examples/README.md](../examples/README.md).
 
 An embedded local-first AI memory/KG library — not a drop-in replacement for Fuseki/GraphDB/Stardog. One file, Go APIs, tool/MCP surfaces, and enough RDF/SPARQL/RDFS/SHACL to build real memory workflows.

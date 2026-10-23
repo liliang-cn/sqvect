@@ -16,7 +16,7 @@
 | Fuseki、GraphDB、Stardog 或独立图数据库 | 足够支撑 local-first agent 工作流的 RDF/SPARQL/RDFS/SHACL，并且和文本、memory 存在同一文件 | 不是完整企业级 RDF server |
 | 为 Claude Code/Codex 自己写 memory 表 | 打包好的插件、MCP server、auto-recall 路径，以及可复用的 memory/KG tools | 具体产品的记忆策略仍需要你自己定义 |
 
-准备 launch 或社区发帖时，可看 [docs/LAUNCH_KIT.md](docs/LAUNCH_KIT.md)，里面有可直接改的 Show HN、Reddit 和 demo 脚本。
+准备 launch 或社区发帖时，可看 [docs/LAUNCH_KIT.md](LAUNCH_KIT.md)，里面有可直接改的 Show HN、Reddit 和 demo 脚本。
 
 ## 功能一览
 
@@ -29,7 +29,7 @@
 - **知识图谱** — 同一文件上的 RDF 三元组/四元组,**属性图也能当 RDF 读**:抽取和 `upsert_entities` 写进去的一切,都以只读三元组的形式参与 SPARQL、推理和 SHACL(`cxn:` 节点、`cxt:` 类型、`cxr:` 关系、`cxp:` 属性),不复制数据,也就没有同步问题。**RDF 1.2**:三元组项 `<<( s p o )>>`、具名化三元组和 `{| |}` 注解,于是"关于一条事实的事实"(谁说的、多大把握)本身也能查询;支持带书写方向的字面量。SPARQL 1.1 和 1.2——查询、带图管理(`ADD`/`COPY`/`MOVE`/`CLEAR`/`DROP`)的更新、全部属性路径、JSON/XML/CSV/TSV 结果格式,以及通过应用设置的处理器执行的 `SERVICE`——在两种后端上通过 W3C 官方测试:RDF 1.2 与 RDF/XML 全部通过,SPARQL 1.2 269/269,SPARQL 1.1 查询 329/331(两条是有意的宽松处理:`"1" + "2"` 得 3)、更新 157/157、结果格式和联邦查询全部通过。半朴素求值的物化推理,覆盖 RDFS 和 OWL 2 RL 规则——`inverseOf`、对称、传递、`equivalentClass`/`equivalentProperty`、`sameAs`、**键**(`FunctionalProperty` / `InverseFunctionalProperty` / `hasKey` 推出 `sameAs`:邮箱相同就是同一个人)、**属性链**,以及类表达式(`someValuesFrom`、`allValuesFrom`、`hasValue`、`intersectionOf`、`unionOf`、`oneOf`、最大基数)——事实变化时**自动**保持最新(删除再重推,异步执行,`WaitForInference` 可读到自己刚写入的结果),每条推理结果都能解释来源。矛盾(`disjointWith` 与 `AllDisjointClasses`、不相交属性、函数型属性出现两个值、`differentFrom` 与 `AllDifferent` 和推出的 `sameAs` 冲突、非自反和非对称属性、否定属性断言、`complementOf`、`owl:Nothing`、基数为 0)会连同冲突的三元组一起报告,绝不靠猜来消解。**完整的 SHACL Core**——全部属性路径、限定值形状、`sh:lessThan`、隐式类目标;W3C Core 测试 98/98——以及 **SHACL-SPARQL**(`sh:sparql` 约束和基于 SPARQL 的约束组件,支持预绑定;22 条通过 21 条,规范中可选的 `$shapesGraph` 除外),还有 **SHACL-AF 规则**(`sh:TripleRule`,支持条件、顺序和节点表达式,迭代到不动点,结果可解释)。属性图上的**只读 Cypher / GQL**(`graph_cypher_query`:MATCH / OPTIONAL MATCH / WITH / 最多 6 跳的变长路径 / 聚合;3,897 个 openCypher TCK 场景 0 错答——做不到的直接拒绝)。N-Triples/N-Quads/Turtle/TriG/JSON-LD 读写和 RDF/XML 导入(大多数 OWL 本体以此发布),JSON-LD 绝不拉取远程 context;属性图侧 `apply_inference` 物化两跳关系组合并带出处;实体记录断言文档,`delete_document_graph` 是按摄入形状做的删除。
 - **Ontology(Palantir 风格)** — 带主键与基数的对象/链接/接口类型,对象集代数(union / intersect / filter / `search_around`),带审计的受治理**动作类型**,自动生成的类型化 agent 工具,以及破坏性变更的 schema diff;`strict` 与 `vocabulary` 两种执行模式。
 - **流水线** — `memoryflow`(转录 → 召回 → 唤醒 → 晋升)、`graphflow`(语料 → 图 → HTML 报告)、`importflow`(CSV / SQL dump / 在线 Postgres-MySQL → RAG + KG)、`connector`(PII 脱敏、签名计划、可逆保险库、CDC 同步)。
-- **工具与 MCP** — 80+ 工具,进程内与 MCP 同名同义,另有交互式图谱视图 `render_graph_html`,实时 3D 视图 `serve_graph_3d`(可在全库查找、提问、用 Cypher 查询、逐个节点展开邻居;只读、适配手机,每个视角都是可分享的链接:`?focus=`、`?ask=`、`?cypher=`;也可以切成按项目上架的记忆图书馆),`import_agent_memory`(把 Claude Code 和 Codex 已有的记忆导进来:记忆笔记、`CLAUDE.md` / `AGENTS.md`、Codex 的记忆库,按需把历史会话提炼成记忆),以及会分页的批量列举工具 `memory_list_all`、`graph_list_all`——`graph_list_all` 默认只给连接最密的核心子图,传 `order: "id"` 才会逐页走完整张图,像 `memory_list_all` 一样返回 `next_cursor`。
+- **工具与 MCP** — 100+ 工具,进程内与 MCP 同名同义,另有交互式图谱视图 `render_graph_html`,实时 3D 视图 `serve_graph_3d`(可在全库查找、提问、用 Cypher 查询、逐个节点展开邻居;只读、适配手机,每个视角都是可分享的链接:`?focus=`、`?ask=`、`?cypher=`;也可以切成按项目上架的记忆图书馆),`import_agent_memory`(把 Claude Code 和 Codex 已有的记忆导进来:记忆笔记、`CLAUDE.md` / `AGENTS.md`、Codex 的记忆库,按需把历史会话提炼成记忆),以及会分页的批量列举工具 `memory_list_all`、`graph_list_all`——`graph_list_all` 默认只给连接最密的核心子图,传 `order: "id"` 才会逐页走完整张图,像 `memory_list_all` 一样返回 `next_cursor`。
 - **对整个库发问** — 检索回答"什么与这个查询相关"，这几个回答"里面有什么"。*范围*检索返回距离查询一定距离内的全部、以外的一个不要，当 top-K 只是在编造一个 K 时这才是诚实的答案（`search_vector_range`，而且响应会说明是否有匹配被上限挡住）。`Aggregate` 按元数据字段计数、求和、分组（`aggregate_metadata`）。`VectorAggregate` 归约向量本身 —— 质心、几何中位数，以及 **medoid**：组内距离其余成员最近的那条**真实记录**，它用算术回答"这批近重复里哪条是正本""这一簇到底在讲什么"，全程不需要模型（`representative_records`）。两个后端行为一致，每种行为一份测试体、两边都跑。
 - **图自己描述自己** — `graph_schema` 报告**观察到的** schema（有哪些节点类型和边类型、每种边实际连接哪对类型、每种节点带哪些属性键），`graph_property_values` 报告某个键实际取哪些值——因为照着键名写的过滤（`color == "black"` 而库里存的是 `BLK`）返回空，而空看起来像个事实。声明的本体是可选的，恰恰在"没人知道形状"的那些图上不存在；这个是从行里量出来的，还附带一份**可以直接贴进 prompt** 的文本形式。同组还有 `rank_graph_nodes`（这个大脑在结构上到底关于什么；结果带计算时间缓存，只在图变了之后才重算）、`graph_statistics`（连通分量远大于 1 说明实体写进去了却从没被连上）、`graph_health`（按 producer 的增长突增、度数长尾里的枢纽节点、每天的 supersede 次数、单值关系同时存在多个值）和 `predict_graph_edges`（缺的事实，或同一实体存了两份）。
 - **整库问题** — `global_search` 把 GraphRAG 全局检索做成调用方显式选择的工具：`build_community_hierarchy` 用 Leiden 保留每一层社区（每一层的每个社区都内部连通，Louvain 保证不了这一点），自底向上写社区报告；`global_search` 在指定 `level` 的报告上做 map-reduce。有模型时由模型写报告和答案，没有模型时报告按确定性规则生成，按词面相关度排序后原样返回，不做综合。
@@ -75,7 +75,7 @@ pkg/core       存储引擎（默认 SQLite，按 DSN 可换 PostgreSQL + pgvect
                向量索引（HNSW/IVF/Flat）。
 ```
 
-配套包：`pkg/eval`（检索质量评测 harness）、`pkg/rpcserver`（`cmd/cortexdb-grpc` 背后的 gRPC facade）、`pkg/agentmem` + `pkg/hindsight`（独立的 SQL agent memory bank，带 disposition 加权反思）、`pkg/semantic-router`（基于 embedding 的查询路由）、`pkg/quantization`（标量/二值向量压缩）、`pkg/geo`（地理空间索引）。
+配套包：`pkg/eval`（检索质量评测 harness）、`pkg/rpcserver`（`cmd/cortexdb-grpc` 背后的 gRPC facade）、`pkg/agentmem` + `pkg/hindsight`（独立的 SQL agent memory bank，带 disposition 加权反思）、`pkg/semantic-router`（查询路由：基于 embedding、稀疏/词法或混合）、`pkg/quantization`（标量/二值向量压缩）、`pkg/geo`（地理空间索引）。
 
 ## 存储后端 —— SQLite 或 PostgreSQL
 
@@ -85,7 +85,7 @@ SQLite 是默认，也是这个库存在的理由：一个文件，不用起服�
 
 ```go
 db, _ := cortexdb.Open(cortexdb.DefaultConfig("/var/lib/cortexdb/brain.db"))          // SQLite
-db, _ := cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"))    // PostgreSQL + pgvector
+db, _ = cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"))     // or PostgreSQL + pgvector
 ```
 
 裸路径一直表示 SQLite 文件，现在依然如此 —— 已有配置不用知道这些改动也照常工作。
@@ -130,9 +130,10 @@ CORTEXDB_TEST_POSTGRES="postgres://postgres:cortex@127.0.0.1:43516/cortex?sslmod
   go test ./...
 ```
 
-这会打开 `pkg/core`、`pkg/graph`、`pkg/cortexdb`、`pkg/agentmem` 里的
-**104 个 PostgreSQL 测试**；不设这个变量，同一次运行会打印 59 处显式 skip，
-并指名哪些没有被覆盖。其中大部分是 parity 测试：一份测试体，在两个数据库上各跑一遍，
+这会打开 `pkg/core`、`pkg/graph`、`pkg/cortexdb`、`pkg/agentmem`、`pkg/graphflow`、
+`pkg/sqldialect`、`internal/pgtest` 里的 PostgreSQL 测试；不设这个变量，同一次运行会
+显式 skip 它们，并指名哪些没有被覆盖。（`pkg/connector` 的 PostgreSQL、MySQL 数据源/CDC
+测试用的是自己的 DSN：`CONNECTOR_PG_DSN`、`CONNECTOR_PG_REPL_DSN` 和 `CONNECTOR_MYSQL_*`。）其中大部分是 parity 测试：一份测试体，在两个数据库上各跑一遍，
 断言它们给出相同答案。这才是要紧的那道闸 —— 因为这里的失效方式是静默的：
 可移植的 SQL 照样能解析、照样返回行，只是不再返回对的行。
 
@@ -148,7 +149,7 @@ BLOB→BYTEA、"duplicate column" 错误文本、JSON 取值），SQL 文本原�
 它是方言适配，不是查询构造器，够不到 Cypher。
 
 如果想用图数据库的查询语言处理这些数据，就导出过去 —— `knowledge_graph_export`
-输出 N-Triples/Turtle/TriG —— 并让 CortexDB 继续做事实来源。
+输出 N-Triples/N-Quads/Turtle/TriG/JSON-LD —— 并让 CortexDB 继续做事实来源。
 
 ### 真正合适的接口：外部召回通道
 
@@ -205,7 +206,7 @@ fmt.Println(rec.ContextPack.Text) // sections + memory/knowledge/chunk ID + enti
 - **`ExpandEntityContext` / `Neighbors` / `ShortestPath`** —— 围绕实体的图谱探索。
 - **`extract_conversation`** —— 确定性（无 LLM）地从会话文本或已存 session 中抽取实体、共现关系和摘要；`persist` 会写入 KG 与 durable knowledge。
 
-`MemorySaveRequest` 可以内联携带 `entities`/`relations`，agent 写入的 memory 在存储的同一次调用里就落进图谱。以上全部也以 `knowledge_memory_*` MCP 工具形式暴露。
+`MemorySaveRequest` 可以内联携带 `entities`/`relations`，agent 写入的 memory 在存储的同一次调用里就落进图谱。以上全部也以 MCP 工具形式暴露：`knowledge_memory_*` 系列，外加 `extract_conversation`。
 
 ## 可组合检索
 
@@ -261,6 +262,12 @@ prov, _  := db.FactProvenanceFor(ctx, edgeID, true) // fact_provenance，带引�
 指：单值关系（本体里有 ONE 一侧，或调用方在 `SingleValued` 里声明）当前是另一个值、
 事实的 `valid_to` 已过、或有一条当前边在 `_contradicts` 里点名否定它。确定性，不调模型。
 
+```go
+res, _ := db.VerifyClaims(ctx, []cortexdb.Claim{{Subject: "Leo", Relation: "lives_in", Object: "Beijing"}},
+	cortexdb.VerifyClaimsOptions{SingleValued: []string{"born_in"}})
+// res.Verdicts[0].Status == "contradicted", Reason == "single_valued_conflict"
+```
+
 `GraphHealth`（工具 `graph_health`）是全书架层面的对应物：按 producer 的增长（带突增检测）、
 入度/出度长尾、每天的 supersede 次数（关闭的事实、被替换的版本、撤回）、时间不变式
 （单值关系上区间重叠，或区间结束早于开始）。每项检查都报告自己是否报警。
@@ -312,7 +319,7 @@ GraphRAG 实体带有 provenance：`upsert_entities` 把每个断言过该实体
 
 ## Ontology（本体）
 
-CortexDB 在同一个文件里建模 Palantir 风格的 ontology：带强制主键的类型化 object type、每侧独立基数的 link type、用于多态检索的 interface、可组合的 object set 代数，以及通过 action type 完成的受治理写入。完整可运行示例见 [`examples/16_ontology`](examples/16_ontology)。
+CortexDB 在同一个文件里建模 Palantir 风格的 ontology：带强制主键的类型化 object type、每侧独立基数的 link type、用于多态检索的 interface、可组合的 object set 代数，以及通过 action type 完成的受治理写入。完整可运行示例见 [`examples/16_ontology`](../examples/16_ontology)。
 
 ```go
 _, err := db.SaveOntologySchema(ctx, cortexdb.OntologySaveRequest{
@@ -377,7 +384,7 @@ diff, err := db.DiffOntologySchema(ctx, cortexdb.OntologyDiffRequest{SchemaID: "
 
 破坏性变更：删除 object type 或 link type、删除属性、属性数据类型改变、属性由可选变必填、新增必填属性、主键变更、link 一侧改指向、基数由 `MANY` 收紧为 `ONE`。非破坏性的新增与放宽也会被报告，并标记为安全。两侧都会先展开 shared property，所以改共享属性的类型是可见的。
 
-工具：`ontology_save`、`ontology_get`、`ontology_list`、`ontology_delete`、`ontology_diff`、`ontology_action_list`、`ontology_action_apply`、`object_set_resolve`。
+工具：`ontology_save`、`ontology_get`、`ontology_list`、`ontology_delete`、`ontology_diff`、`ontology_draft`、`ontology_action_list`、`ontology_action_apply`、`object_set_resolve`。
 
 ### 当前限制
 
@@ -393,7 +400,7 @@ tools := db.GraphRAGTools()                             // 进程内 tool callin
 server := db.NewMCPServer(cortexdb.MCPServerOptions{})  // MCP server
 ```
 
-工具分组（60+ 个工具，进程内与 MCP 同名）：GraphRAG（`ingest_document`、`search_text`、`build_context`、`expand_graph`、`search_paths`、`find_nodes`、`delete_document_graph`）、统一检索（`cortex_query`）、knowledge/memory（`knowledge_save`、`memory_search` …）、KnowledgeMemory（`knowledge_memory_recall`、`_reflect`、`_consolidate`、`extract_conversation`）、KG（`knowledge_graph_query`、`_shacl_validate`、`apply_inference`）、ontology（`ontology_save`、`ontology_action_apply`、`object_set_resolve`）、维护（`vector_dimension_repair`、`sweep_expired`）。MCP server 额外提供 `render_graph_html`——交互式知识图谱视图。`memoryflow`/`graphflow`/`importflow`/`connector` 各自也暴露自己的 toolbox。
+工具分组（100+ 个工具，进程内与 MCP 同名）：GraphRAG（`ingest_document`、`search_text`、`build_context`、`expand_graph`、`search_paths`、`find_nodes`、`delete_document_graph`）、统一检索（`cortex_query`）、knowledge/memory（`knowledge_save`、`memory_search` …）、KnowledgeMemory（`knowledge_memory_recall`、`_reflect`、`_consolidate`、`extract_conversation`）、KG（`knowledge_graph_query`、`_shacl_validate`、`apply_inference`）、ontology（`ontology_save`、`ontology_action_apply`、`object_set_resolve`）、维护（`vector_dimension_repair`、`sweep_expired`）。`cortexdb-mcp-stdio` 这个二进制额外提供 `render_graph_html`（交互式知识图谱视图）、`serve_graph_3d`、`side_graph_*`、`import_agent_memory`，本地模式下还有 `global_search` / `build_community_hierarchy`；`db.NewMCPServer` 只提供 facade 自己的工具。`memoryflow`/`graphflow`/`importflow`/`connector` 各自也暴露自己的 toolbox。
 
 ### 过期与清理
 
@@ -407,7 +414,7 @@ server := db.NewMCPServer(cortexdb.MCPServerOptions{})  // MCP server
 
 `ingest_document`、`knowledge_save`、`knowledge_update`、`memory_save`、`memory_update`（以及使用 `memory_save` 请求的 `knowledge_memory_remember`）接受 `review_status`（`proposed`、`accepted`、`rejected`），批准或拒绝时可带 `reviewed_by` 和 `reviewed_at`。服务端启用 key 时，审核人就是调用方的 key，`reviewed_by` 写成别人会被拒绝；提议（proposed）不带这两个字段。没有给出审核决定的写入保留原来的决定。引擎把它存在自己的键 `_review_status`、`_reviewed_by`、`_reviewed_at` 下，只放在记录上；名为 `review_status` 的 metadata 键属于调用方，引擎从不读取。
 
-服务端（或 `cortexdb-mcp-stdio`）设置 `CORTEXDB_REVIEW_GATE=1` 时，待审和被拒的文档、记忆不进任何搜索和召回、分块工具、统计，也不出现在从某个节点出发的图遍历里（`knowledge_memory_neighbors`、`knowledge_memory_expand_entity_context`、`expand_graph`、`get_nodes`、`search_paths`、`knowledge_memory_shortest_path`）。按原样读图的工具（`find_nodes`、`disambiguate_mentions`、`predict_graph_edges`、`rank_graph_nodes`、`graph_list_all`、`graph_cypher_query`）仍会返回，就像过期行在清理前仍会返回一样。不开门禁时只记录决定、不隐藏任何东西。门禁是整理用的过滤，不是权限控制：`knowledge_get` 和 `memory_get` 仍能按 id 读到被隐藏的行，任何写入方都能直接存为 `accepted`，`plan.filters.review_status` 也能让任何读取方列出某种状态的文档（记忆忽略这个过滤）。整理者用按 `_review_status` 过滤的 `aggregate_metadata` 列出待审内容。在计划和统计里按 `accepted` 过滤时，也包括没有状态的文档。开门禁时，待审或被拒的记忆不会被提升为知识，对话摘要也不会包含它。引擎自己做的其他写入（整合、对话提取、导入）不带状态。
+服务端（或 `cortexdb-mcp-stdio`）设置 `CORTEXDB_REVIEW_GATE=1` 时，待审和被拒的文档、记忆不进任何搜索和召回、分块工具、统计，也不出现在从某个节点出发的图遍历里（`knowledge_memory_neighbors`、`knowledge_memory_expand_entity_context`、`expand_graph`、`get_nodes`、`search_paths`、`knowledge_memory_shortest_path`）。按原样读图的工具（`find_nodes`、`disambiguate_mentions`、`predict_graph_edges`、`rank_graph_nodes`、`graph_list_all`、`graph_cypher_query`）仍会返回，就像过期行在清理前仍会返回一样。不开门禁时只记录决定、不隐藏任何东西。门禁是整理用的过滤，不是权限控制：`knowledge_get` 和 `memory_get` 仍能按 id 读到被隐藏的行，任何写入方都能直接存为 `accepted`，`plan.filters.review_status` 也能让任何读取方列出某种状态的文档（记忆忽略这个过滤）。整理者用按 `_review_status` 过滤的 `aggregate_metadata` 列出待审内容，它读的是记录上的决定。在计划和统计里按 `accepted` 过滤时，也包括没有状态的文档。开门禁时，待审或被拒的记忆不会被提升为知识，对话摘要也不会包含它。引擎自己做的其他写入（整合、对话提取、导入）不带状态。
 
 ## Claude Code 和 Codex 插件
 
@@ -471,10 +478,13 @@ export CORTEXDB_GRPC_TOKEN="<同一个 token>"
 自动召回 hook 走同一个远端，因此注入的记忆和工具写入的是同一个大脑；
 `--memory-html` 和 `--export-memory` 同样如此。
 
-传输是明文的，这是设计使然 —— 只能跑在环回、可信 LAN 或 Tailscale 上。
-**token 就是全部的访问控制**：拿到它就有完整读写权。embedder 和 LLM 配置在
-服务端，不在客户端。`--graph-html` 同样读共享大脑；其余一次性模式
-（`--export-memory`、`--learn-path`）仍作用于本地数据库。
+传输是明文的，这是设计使然 —— 只能跑在环回、可信 LAN 或 Tailscale 上，或者放在
+做 TLS 终结的反向代理后面，以 `https://host` 发布。只用单个 token 时，**token 就是
+全部的访问控制**：拿到它就有完整读写权。要更细的控制，给服务端一个 key 文件
+（`CORTEXDB_KEY_FILE` 或 `-keys`）：每个 key 是 `read-only` 或 `read-write`，还可以
+限定在某些 user id、记忆 scope、namespace 和 collection 上。embedder 和 LLM 配置在
+服务端，不在客户端。`--graph-html` 和 `--export-memory` 同样读共享大脑；
+`--learn-path` 仍作用于本地数据库。
 
 手动跑起来足够试用；要让它常驻，[`deploy/`](../deploy/) 里有加固过的 systemd
 unit、healthcheck 就是服务端二进制自己（`cortexdb-grpc -health`）的容器镜像和
@@ -482,8 +492,9 @@ compose 文件，以及配套的备份、升级和端口覆盖说明。**所有�
 覆盖**：`CORTEXDB_GRPC_ADDR`（或 `-addr`）改服务端口，`CORTEXDB_LIVE_PORT`
 改实时图谱视图端口。
 
-图谱视图也是一个 MCP 工具 `render_graph_html`。它是唯一**不**代理到共享大脑的
-工具：图谱数据从远端读，但 HTML 在 MCP 服务所在的机器上渲染和落盘 —— 调用方需要
+图谱视图也是一个 MCP 工具 `render_graph_html`。它和 `serve_graph_3d`、`side_graph_*`、
+`import_agent_memory` 一样，是少数**不**代理到共享大脑、在 MCP 服务所在机器上执行的
+工具：图谱数据从远端读，但 HTML 在本机渲染和落盘 —— 调用方需要
 文件在自己的文件系统上才能打开或作为附件发出，服务端渲染会把文件留在大脑主机上，
 请求它的一方根本够不到。用 `CORTEXDB_VIEW_DIR` 指定输出目录。
 
@@ -509,7 +520,7 @@ hermes config set memory.provider cortexdb
 hermes gateway restart
 ```
 
-先运行 `cortexdb-grpc`，再按各插件 README 安装。现有 [`skills/`](skills/)
+先运行 `cortexdb-grpc`，再按各插件 README 安装。现有 [`skills/`](../skills/)
 仍适合提供显式工具指引与 helper，但 skill 本身不会替换宿主的原生记忆后端。
 
 ## 在其他语言中使用（gRPC sidecar）
@@ -528,6 +539,6 @@ cargo add cortexdb-client   # pip install cortexdb-client   # npm install cortex
 
 ## 示例与状态
 
-`examples/01_core` … `16_ontology` 短小、面向架构（`go run ./examples/01_core`）；01-07/09/15/16 可独立运行，其余需要 LLM/embeddings/线上 DB——见 [examples/README.md](examples/README.md)。
+`examples/01_core` … `19_execution_graph` 短小、面向架构（`go run ./examples/01_core`）；01-07/09/15/16/18/19 可独立运行，其余需要 LLM/embeddings/线上 DB——见 [examples/README.md](../examples/README.md)。
 
 一个可嵌入的 local-first AI memory/KG 库——并非 Fuseki/GraphDB/Stardog 这类完整图数据库产品的替代品。一个文件、Go API、tool/MCP 接口，以及足够构建实用记忆工作流的 RDF/SPARQL/RDFS/SHACL 能力。

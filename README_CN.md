@@ -25,8 +25,8 @@
 db, _ := cortexdb.Open(cortexdb.DefaultConfig("brain.db"))
 defer db.Close()
 brain := db.KnowledgeMemory()
-_, _ = brain.Remember(ctx, cortexdb.KnowledgeMemoryRememberRequest{Content: "Alice 偏好 tab 缩进。", Scope: "user"})
-rec, _ := brain.Recall(ctx, cortexdb.KnowledgeMemoryRecallRequest{Query: "Alice 偏好什么?"})
+_, _ = brain.Remember(ctx, cortexdb.KnowledgeMemoryRememberRequest{MemoryID: "alice-tabs", UserID: "alice", Scope: "user", Content: "Alice 偏好 tab 缩进。"})
+rec, _ := brain.Recall(ctx, cortexdb.KnowledgeMemoryRecallRequest{Query: "Alice 偏好什么?", UserID: "alice"})
 fmt.Println(rec.ContextPack.Text)
 ```
 
@@ -61,16 +61,16 @@ mod 会自己调用插件的三个工具，而钩子里的调用不会弹权限�
 - **状态栏**：当前连的是哪个大脑、节点数、上次召回用时；连不上时显示原因。
 - **自动记忆**：会话空闲 90 秒后，haiku 把新增的对话提炼成长期记忆（`auto:<会话>:<slug>`）。之后再提炼时，同一个 slug 是替换而不是重复写一条。新记忆推翻的旧记忆（换了主机、改了决定）会被标记为已替代：仍然保留，但不再作为当前事实被召回。
 
-haiku 用的是 Claude Code 自己的模型额度，不需要 API key。语言：`/config` → `cortexdb-live` → `language`（`auto`、`zh`、`en`）。mod 认插件原有的开关：`cortexdb-recall --disable`、`cortexdb-session-end --disable` 会同时关掉两边的召回和记忆。mod 运行时，插件的 shell 召回和记忆钩子会自动让开，不会重复做。Codex 仍然用那两个钩子。mod 是 Claude Code 的早期功能（按 2.1.290 构建）。
+haiku 用的是 Claude Code 自己的模型额度，不需要 API key。语言：`/config` → `cortexdb-live` → `language`（`auto`、`zh`、`en`）。mod 认插件原有的开关：`cortexdb-recall --disable`、`cortexdb-session-end --disable` 会同时关掉两边的召回和记忆。mod 运行时，插件的 shell 召回和记忆钩子会自动让开，不会重复做。Codex 仍然用那两个钩子。mod 是 Claude Code 的早期功能。
 
 ## 里面有什么
 
 - 向量（HNSW、IVF、Flat、二值编码）、FTS5 全文检索、混合检索与图检索
 - `EmbeddedConfig`，给小设备用：SQ8 量化索引、有上限的 SQLite 缓存、断电也不丢的索引快照——10 万条 768 维向量 0.28 秒打开，堆内存 193 MB
 - RAG 知识、分作用域的 agent 记忆、带来源的上下文包
-- RDF 1.2 知识图谱：SPARQL 1.1/1.2、RDFS + OWL 2 RL 推理、SHACL Core + SHACL-SPARQL、RDF/XML 导入（通过 W3C 官方测试），以及只读 Cypher
+- RDF 1.2 知识图谱：SPARQL 1.1/1.2、RDFS + OWL 2 RL 推理、SHACL Core + SHACL-SPARQL、RDF/XML 导入——通过 W3C 的 SPARQL 1.1/1.2、RDF 1.2（Turtle、TriG、N-Triples、N-Quads、RDF/XML）和 SHACL 官方测试集，RDFS 和 OWL 2 RL 用的是仓库自己的测试——以及只读 Cypher
 - Palantir 风格的 ontology，带受治理的动作
-- 80+ 工具，进程内调用或走 MCP
+- 100+ 工具，进程内调用或走 MCP
 - `serve_graph_3d`：实时 3D 视图，可查找、提问、查询、展开，桌面和手机都能用；也可以切成图书馆，每条记忆是它所属项目书架上的一本书
 - `import_agent_memory`：把 Claude Code、Codex 和 DeepSeek Harness 已有的记忆导进来——记忆笔记、`CLAUDE.md` / `AGENTS.md`、Codex 的记忆库，也可以把历史会话提炼成记忆——本地大脑和共享大脑都行
 - 变更事件流：每次已提交的写入，按顺序、恰好一次
@@ -84,8 +84,9 @@ haiku 用的是 Claude Code 自己的模型额度，不需要 API key。语言�
 | `CORTEXDB_REMOTE` | 连到共享的 `cortexdb-grpc`，不用本地文件：`host:port` 是明文，`https://host` 走 TLS（放在反向代理后面时用） |
 | `CORTEXDB_GRPC_TOKEN` | 该服务的 Bearer token |
 | `CORTEXDB_GRPC_ADDR` | 服务端监听地址（默认 `127.0.0.1:47821`） |
-| `CORTEXDB_EMBED_BASE_URL` | OpenAI 兼容的 embeddings 端点；不设就是词法模式 |
-| `CORTEXDB_EMBED_MODEL` / `CORTEXDB_EMBED_DIM` | embedding 模型和维度 |
+| `CORTEXDB_EMBED_BASE_URL` / `CORTEXDB_EMBED_API_KEY` | `cortexdb-mcp-stdio`：OpenAI 兼容的 embeddings 端点和它的 key（没设时退回 `OPENAI_BASE_URL` / `OPENAI_API_KEY`）；不设就是词法模式 |
+| `OPENAI_BASE_URL` / `OPENAI_API_KEY` | 服务端：embeddings 端点和 key（`cortexdb-grpc` 只读这两个，不读 `CORTEXDB_EMBED_BASE_URL`）；不设就是词法模式 |
+| `CORTEXDB_EMBED_MODEL` / `CORTEXDB_EMBED_DIM` | embedding 模型和维度，两边都读（默认 `text-embedding-3-small` / `1536`） |
 | `CORTEXDB_REVIEW_GATE` | 服务端和 `cortexdb-mcp-stdio`：`1` 时待审和被拒的文档、记忆不进搜索和召回（默认关；这是整理用的过滤，不是权限控制） |
 | `CORTEXDB_SLOW_MS` | 服务端：超过这个毫秒数的请求记日志，带各阶段耗时（默认 `1000`，`0` 不记） |
 | `CORTEXDB_TRACE` / `CORTEXDB_TRACE_FILE` | 服务端：每个请求都记；同时把记录追加到 JSON lines 文件 |

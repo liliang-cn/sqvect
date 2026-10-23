@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/go-mysql-org/go-mysql v1.15.0
 	github.com/go-sql-driver/mysql v1.10.0
+	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pglogrepl v0.0.0-20260401131349-e37c41485510
 	github.com/jackc/pgx/v5 v5.10.0
@@ -26,7 +27,6 @@ require (
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
-	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/jackc/pgio v1.0.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

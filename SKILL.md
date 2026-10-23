@@ -24,6 +24,20 @@ pkg/graphflow
 pkg/importflow
   External structured-data import (CSV / MySQL-PG dumps) into RAG + knowledge-graph foundations, AI-assisted mapping optional.
 
+pkg/connector
+  Live data sources → importflow with desensitization: schema introspection, PII
+  classification, a human-signed MaskingPlan, CDC.
+
+pkg/agentmem
+  SQL-backed agent memory: typed memories, banks, mental models, context slots;
+  no embedder (FTS5 trigram + importance/decay ranking).
+
+pkg/hindsight
+  Optional recall-strategy plugin for memoryflow (bank/entity/keyword cues, KG enrichment).
+
+pkg/semantic-router
+  Optional pre-retrieval intent routing (embedding-based, sparse/lexical, or hybrid).
+
 pkg/graph
   Low-level graph engine: property graph, RDF triples/quads, SPARQL, RDFS, SHACL.
 
@@ -70,7 +84,9 @@ Choose by the job to be done:
 
 - Engine layer: `pkg/core` + `pkg/graph`
 - Application facade: `pkg/cortexdb`
-- Higher-level workflows: `KnowledgeMemory`, `memoryflow`, `graphflow`
+- Higher-level workflows: `KnowledgeMemory`, `memoryflow`, `graphflow`, `importflow` (+ `connector`)
+- Standalone agent memory without an embedder: `agentmem`
+- Optional plugins: `hindsight` (memoryflow recall strategy), `semantic-router` (intent routing)
 - Agent exposure layer: `GraphRAGTools`, MCP
 
 ## Common Compositions
@@ -124,7 +140,7 @@ The DSN chooses the backend. Nothing else changes:
 
 ```go
 db, _ := cortexdb.Open(cortexdb.DefaultConfig("/var/lib/cortexdb/brain.db"))        // SQLite (default)
-db, _ := cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"))  // PostgreSQL + pgvector
+db, _ = cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"))   // or PostgreSQL + pgvector
 ```
 
 - A bare path still means a SQLite file, so existing configuration is unaffected.
@@ -140,9 +156,11 @@ db, _ := cortexdb.Open(cortexdb.DefaultConfig("postgres://u:pw@host:5432/cortex"
   2000 dimensions, so a wider model falls back to an exact scan and says so;
   pgvector itself is optional and a missing extension degrades to the in-Go scan.
 - PostgreSQL tests are opt-in and loudly skipped:
-  `CORTEXDB_TEST_POSTGRES="postgres://..." go test ./...` turns on 104 tests
-  across `pkg/core`, `pkg/graph`, `pkg/cortexdb`, `pkg/agentmem`; without it the
-  run prints 59 skips naming what is uncovered. Most are parity tests — one body,
+  `CORTEXDB_TEST_POSTGRES="postgres://..." go test ./...` turns them on in
+  `pkg/core`, `pkg/graph`, `pkg/cortexdb`, `pkg/agentmem`, `pkg/graphflow`,
+  `pkg/sqldialect` and `internal/pgtest`; without it the run skips them, naming
+  what is uncovered (`pkg/connector`'s source/CDC tests take their own
+  `CONNECTOR_PG_DSN` / `CONNECTOR_PG_REPL_DSN` / `CONNECTOR_MYSQL_*`). Most are parity tests — one body,
   both databases, same answer required — because the failure mode is silent.
 - External retrieval lanes are a *different* seam from storage:
   `cortexdb.QuerySource` (`Name()` + `Search()`) registered with
@@ -196,11 +214,11 @@ _, _ = db.SaveMemory(ctx, cortexdb.MemorySaveRequest{
 
 No-embedder mode is supported. Use lexical retrieval plus LLM-planned `Keywords`, `AlternateQueries`, `EntityNames`, and `RetrievalMode`.
 
-Retrieval mode `ppr` runs Personalized PageRank (HippoRAG 2 style) from the entities a question names, rank-fused with the first stage; tune it with `ppr: {fusion, damping, passage_seed_weight, edge_type_weights}`. Without an embedder, `auto` takes that walk whenever a knowledge search names an entity specific enough to start from (an entity more than 10% of passages mention, like a conversation's speaker, is not) and stays lexical otherwise — recall@5 through the public API, lexical → auto: 2WikiMultiHopQA 0.657 → 0.807, MuSiQue 0.457 → 0.542, LoCoMo 0.493 → 0.495, LongMemEval 0.861 → 0.862. `SaveKnowledge` builds the entity graph without an embedder too, and a title that reads as a name links every chunk of its document. With an embedder `auto` stays hybrid; pass `retrieval_mode: "ppr"` for multi-hop questions.
+Retrieval mode `ppr` runs Personalized PageRank (HippoRAG 2 style) from the entities a question names, rank-fused with the first stage; tune it with `ppr: {fusion, damping, passage_seed_weight, edge_type_weights}`. Without an embedder, `auto` takes that walk whenever a knowledge search names an entity specific enough to start from (an entity mentioned in more than 10% of passages and more than 20 times, like a conversation's speaker, is not) and stays lexical otherwise — recall@5 through the public API, lexical → auto: 2WikiMultiHopQA 0.657 → 0.807, MuSiQue 0.457 → 0.542, LoCoMo 0.493 → 0.495, LongMemEval 0.861 → 0.862. `SaveKnowledge` builds the entity graph without an embedder too, and a title that reads as a name links every chunk of its document. With an embedder `auto` stays hybrid; pass `retrieval_mode: "ppr"` for multi-hop questions.
 
 Documents can expire and carry a review decision. `ingest_document`, `knowledge_save` and `knowledge_update` take `expires_at` (RFC 3339); past it the document is left out of every search, chunk tool, graph walk and aggregate, and `sweep_expired` / `cortexdb-mcp-stdio --sweep-expired [--dry-run]` deletes expired documents and memories. The same writes, plus `memory_save` and `memory_update`, take `review_status` (`proposed`, `accepted`, `rejected`) with `reviewed_by`/`reviewed_at`; with `CORTEXDB_REVIEW_GATE=1` (or `WithReviewGate()`) proposed and rejected rows are left out of search and recall. The gate is a curation filter, not access control. The engine keeps these under its own keys (`_expires_at`, `_review_status`, …); a caller's `expires_at` or `review_status` metadata key is plain data. `ingest_document` hashes its content (`_content_sha256`): an identical re-ingest returns `unchanged`, and `dedupe: true` refuses a copy already stored in the same collection. With an embedder it embeds like `knowledge_save`.
 
-Chinese (and other CJK) questions work in lexical mode as written. A sentence such as `微信机器人为什么从来不主动给我发提醒` is cut at function words (的, 了, 为什么, 那个, …), broken into character bigrams, matched by substring and ranked with BM25, then merged beside the word-index results — for memory, `SearchKnowledge`, `SearchTextOnly` and the `search_text` tool alike, on both backends, and inside the authorization gate. A row is returned only when it matches more than one word of the question (two separate stretches, or one of four characters or more, or the whole of a one-word question) and at least 30% of its content characters, so a question the store knows nothing about still returns nothing.
+Chinese (and other CJK) questions work in lexical mode as written. A sentence such as `微信机器人为什么从来不主动给我发提醒` is cut at function words (的, 了, 为什么, 那个, …), broken into character bigrams, matched by substring and ranked with BM25, then merged beside the word-index results — for memory, `SearchKnowledge`, `SearchTextOnly` and the `search_text` tool alike, on both backends, and inside the authorization gate. A row is returned only when it matches more than one word of the question (two separate stretches, or one of four characters or more, or the whole of a one-word question) and covers at least 30% of the question's content characters, so a question the store knows nothing about still returns nothing.
 
 ## Knowledge Graph APIs
 
@@ -361,7 +379,7 @@ rec, err := db.RecordDecision(ctx, cortexdb.DecisionRecordRequest{
 chain, _ := db.DecisionChain(ctx, rec.ID, 0)     // premises with each one's grade and source
 prior, _ := db.Precedents(ctx, cortexdb.PrecedentsQuery{Kind: "review", Subject: "svc:ledger"})
 mine, _ := db.DecisionsBy(ctx, "liliang", 20)
-_, _, _ = chain, prior, err
+_, _, _, _ = chain, prior, mine, err
 ```
 
 It fails closed and it fails before writing anything: an empty actor, an empty
@@ -446,6 +464,7 @@ _ = plan
 why, _ := db.ExplainInference(ctx, cortexdb.InferenceExplainRequest{EdgeID: applied.CreatedEdgeIDs[0]})
 // why.Explanation names the rule and its text; why.Trace is the premise chain,
 // flattened in preorder.
+_ = why
 ```
 
 **Literal terms.** A term starting with `?` is a variable. Anything else is a
@@ -866,8 +885,8 @@ The example `examples/05_graphflow` uses `github.com/openai/openai-go/v3` with J
 
 ```env
 OPENAI_API_KEY=...
-OPENAI_BASE_URL=http://43.167.167.6:8080/v1
-OPENAI_MODEL=gpt-5.4
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=<your-model>
 ```
 
 ## ImportFlow
@@ -1054,11 +1073,14 @@ Important tools:
 - Graph analytics: `rank_graph_nodes`, `predict_graph_edges`
 - Disambiguation: `disambiguate_mentions`
 - Path retrieval: `search_paths` (and `return_paths` on `search_graphrag_lexical`, `relation_policies` on `expand_graph`)
+- Side graphs (`cortexdb-mcp-stdio` only, kept on the local machine): `side_graph_write`, `side_graph_read`, `side_graph_list`, `side_graph_drop`
 
 Separate workflow toolboxes:
 
-- memoryflow: `memoryflow_ingest_transcript`, `memoryflow_recall`, `memoryflow_wake_up_layers`, `memoryflow_prepare_reply`
+- memoryflow: `memoryflow_resolve_taxonomy`, `memoryflow_ingest_transcript`, `memoryflow_recall`, `memoryflow_wake_up_layers`, `memoryflow_close_session`, `memoryflow_list_episodes`, `memoryflow_get_transcript`, `memoryflow_append_diary`, `memoryflow_list_diary`, `memoryflow_prepare_reply`, `memoryflow_apply_memory_edits`
 - graphflow: `graphflow_build`, `graphflow_analyze`, `graphflow_report`, `graphflow_export`, `graphflow_run`, `global_search`, `build_community_hierarchy`
+- importflow: `importflow_plan`, `importflow_run`, `importflow_ddl_plan` (deterministic `CREATE TABLE` DDL → reviewable knowledge-graph MappingPlan, no LLM), `importflow_ddl_plan_ai` (LLM-refined DDL→KG plan; returns refined plan + deterministic baseline + `llm_used`; needs an `LLMInferer`) (via `importflow.NewToolbox(im)` or `importflow.NewMCPServer(im, opts)` / `importflow.RunMCPStdio(ctx, im, opts)`)
+- connector: `connector_introspect`, `connector_plan`, `connector_run`, `connector_unmask` — privacy gate over a live DB/source feeding RAG + KG. Wire via `connector.NewMCPServer(tb, opts)` / `connector.RunMCPStdio(ctx, tb, opts)`, `connector.RegisterMCPTools(server, tb)` to ride another server, or run `cmd/cortexdb-connector-mcp`.
 
 ### Shared brain — one CortexDB, many agents and machines
 
@@ -1092,16 +1114,21 @@ rather than asking for everything in one call, so none of them stop working
 once a brain no longer fits in one gRPC message.
 
 Transport is plaintext by design — run it over loopback, a trusted LAN, or
-Tailscale. **The token is the access control**: anyone holding it has full
-read/write access. Embedder and LLM settings live on the server, not the
+Tailscale, or publish it as `https://host` behind a TLS-terminating proxy
+(`CORTEXDB_REMOTE=https://host`; see `pkg/rpc/endpoint.go`). With a single
+token, **the token is the access control**: anyone holding it has full
+read/write access. For finer control, give the server a key file
+(`CORTEXDB_KEY_FILE` or `-keys`): each key is `read-only` or `read-write` and
+can be confined to user ids, memory scopes, namespaces and collections. Embedder and LLM settings live on the server, not the
 clients. `--graph-html`, `--recall-eval` and `--capture-session` follow the
 remote too. Some one-shot modes are local-only by design — `--learn-path`,
 `--reembed-memories` and `--graph-cleanup` among them; the latter two need
 direct database access, so they run where the database lives.
 
-The graph view is also an MCP tool, `render_graph_html`. It is the one tool that
-is **not** proxied to the shared brain: the graph is read remotely, but the HTML
-is rendered and written where the MCP server runs, because the caller needs the
+The graph view is also an MCP tool, `render_graph_html`. It is one of the few
+tools that are **not** proxied to the shared brain — with `serve_graph_3d`,
+`side_graph_*` and `import_agent_memory`, it runs where the MCP server runs. The
+graph is read remotely, but the HTML is rendered and written locally, because the caller needs the
 file on its own filesystem to open or attach it — a server-side render would
 land it on the brain's host, out of reach of whatever asked. Set
 `CORTEXDB_VIEW_DIR` to choose where renders go.
@@ -1176,16 +1203,17 @@ All adapters call the existing gRPC `ToolsService` and prefer
 `knowledge_memory_recall`; do not implement a separate retrieval or storage path
 inside an agent plugin. The `skills/cortexdb-memory-*` directories remain the
 lighter explicit-tool integration.
-- importflow: `importflow_plan`, `importflow_run`, `importflow_ddl_plan` (deterministic `CREATE TABLE` DDL → reviewable knowledge-graph MappingPlan, no LLM), `importflow_ddl_plan_ai` (LLM-refined DDL→KG plan; returns refined plan + deterministic baseline + `llm_used`; needs an `LLMInferer`) (via `importflow.NewToolbox(im)` or `importflow.NewMCPServer(im, opts)` / `importflow.RunMCPStdio(ctx, im, opts)`)
-- connector: `connector_introspect`, `connector_plan`, `connector_run`, `connector_unmask` — privacy gate over a live DB/source feeding RAG + KG. Wire via `connector.NewMCPServer(tb, opts)` / `connector.RunMCPStdio(ctx, tb, opts)`, `connector.RegisterMCPTools(server, tb)` to ride another server, or run `cmd/cortexdb-connector-mcp`.
 
 ## gRPC Sidecar + Rust / Python / Node clients
 
 The full facade is also served over gRPC for non-Go callers:
 
-- Server binary: `cmd/cortexdb-grpc` (env/flags: `CORTEXDB_PATH`,
-  `CORTEXDB_GRPC_ADDR` default `127.0.0.1:47821`, `CORTEXDB_GRPC_TOKEN` enables
-  bearer auth, `OPENAI_BASE_URL`/`OPENAI_API_KEY`/`CORTEXDB_EMBED_MODEL`/
+- Server binary: `cmd/cortexdb-grpc` (env/flags: `CORTEXDB_PATH` / `-db`,
+  `CORTEXDB_GRPC_ADDR` / `-addr` default `127.0.0.1:47821`, `CORTEXDB_GRPC_TOKEN` /
+  `-token` enables bearer auth, `CORTEXDB_KEY_FILE` / `-keys` a JSON file of scoped
+  API keys that replaces the single token, `CORTEXDB_BACKUP_DIR` / `-backup-dir`
+  where `AdminService.Backup` may write, `CORTEXDB_HTTP_ADDR` / `-http-addr` also
+  serves REST + `/metrics` + `/debug/vars`, `OPENAI_BASE_URL`/`OPENAI_API_KEY`/`CORTEXDB_EMBED_MODEL`/
   `CORTEXDB_EMBED_DIM` wire an OpenAI-compatible embedder; unset → lexical mode).
   Flags override the environment, which overrides the defaults. `-health`
   probes a server already running at `-addr` and exits non-zero when it is not
@@ -1195,7 +1223,8 @@ The full facade is also served over gRPC for non-Go callers:
   compose file, plus backup/upgrade notes.
 - Proto contract: `proto/cortexdb/v1/` — services `KnowledgeService`,
   `MemoryService`, `KnowledgeGraphService`, `GraphRagService`, `ToolsService`
-  (generic `CallTool(name, json)` over the same toolbox as MCP), `AdminService`.
+  (generic `CallTool(name, json)` over the same toolbox as MCP), `ContractService`,
+  `DecisionService`, `AdminService`.
 - Go layers: generated stubs in `pkg/rpc/v1`, conversion-only handlers in
   `pkg/rpcserver` (no business logic there). Regenerate via `scripts/gen-proto.sh`.
 - Clients (all published under the name `cortexdb-client`, mirroring the same
