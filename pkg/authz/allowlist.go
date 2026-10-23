@@ -108,6 +108,11 @@ type toolRule struct {
 	// most: the tool reads one and ignores the other, and the guard must
 	// read the one the tool reads.
 	oneOf []string
+	// facade marks a tool whose stores the facade holds to the caller scope
+	// itself (cortexdb.CallerScope, set by Key.CallerContext): it has no
+	// scope field to force and needs no gate, whatever field the key is
+	// confined on.
+	facade bool
 	// rewritten lists, for a tool whose facade writes the engine's own keys
 	// over the caller's (cortexdb.EngineDocumentKeys on a document,
 	// cortexdb.EngineMemoryKeys on a memory), those keys: a row read back and
@@ -237,6 +242,29 @@ var confinedTools = map[string]toolRule{
 	"memory_update": {stores: storeMemory, rewritten: cortexdb.EngineMemoryKeys, args: paths([]string{"content", "importance", "ttl_seconds", "metadata.*"}, reviewArgs), ids: []idField{{"memory_id", idMemory}}},
 	"memory_delete": {stores: storeMemory, ids: []idField{{"memory_id", idMemory}}},
 
+	// The graph, walked from a seed or read by node id. Under a caller scope
+	// the facade leaves out the chunks and documents of a collection the key
+	// may not read, the memories of a bucket it may not read, and the
+	// entities no permitted collection lists, and serves an entity with its
+	// id and name alone (cortexdb's withoutExpiredDocuments, servedSeeds).
+	// Node ids and entity names are data, as plan.filters.document_ids is:
+	// a node the scope hides answers as a node that does not exist, a name
+	// included whose best match it hides, so loading it here and refusing
+	// it would tell the two apart.
+	"search_chunks_by_entities": {stores: storeKnowledge | storeMemory, facade: true,
+		args: []string{"entity_names", "top_k", "max_hops"}},
+	"search_paths": {stores: storeKnowledge | storeMemory, facade: true,
+		args: []string{"entity_names", "node_ids", "max_depth", "direction", "edge_types", "relation_policies.*", "decay", "use_edge_weights", "max_paths", "max_expansions", "include_bookkeeping", "with_text"}},
+	"knowledge_memory_expand_entity_context": {stores: storeKnowledge | storeMemory, facade: true,
+		args: []string{"entity_ids", "entity_names", "max_hops", "edge_types", "node_types", "limit", "top_k_chunks", "max_context_chunks", "max_context_chars", "per_document_limit", "chunk_window", "retrieval_mode", "disable_graph", "graph_light", "max_entities_per_chunk"}},
+	"expand_graph": {stores: storeKnowledge | storeMemory, facade: true,
+		args: []string{"node_ids", "max_hops", "edge_types", "node_types", "limit", "relation_policies.*"}},
+	"get_nodes": {stores: storeKnowledge | storeMemory, facade: true, args: []string{"node_ids"}},
+	"knowledge_memory_neighbors": {stores: storeKnowledge | storeMemory, facade: true,
+		args: []string{"node_id", "entity_name", "max_depth", "edge_types", "node_types", "direction", "limit"}},
+	"knowledge_memory_shortest_path": {stores: storeKnowledge | storeMemory, facade: true,
+		args: []string{"from_node_id", "to_node_id", "from_entity_name", "to_entity_name"}},
+
 	// Both stores, each behind its gate. Recall adds no graph facts for a
 	// caller with a scope (cortexdb.KnowledgeMemory.Recall).
 	"knowledge_memory_recall": {scope: bothScopes, stores: storeKnowledge | storeMemory,
@@ -248,20 +276,24 @@ var confinedTools = map[string]toolRule{
 // refusedTools are the tools a confined key may not call, with why. Every
 // tool the toolbox defines is here or in confinedTools.
 var refusedTools = map[string]string{
-	"cortex_query":                           "its graph prefetch searches chunks of every collection",
-	"knowledge_memory_consolidate":           "reads memories and writes a document, under promotion.*, in one call",
-	"knowledge_memory_promote_to_knowledge":  "reads memories and writes a document in one call",
-	"knowledge_memory_reflect":               "reads both stores through recall.* with no gate of its own",
-	"get_chunks":                             "names chunks, whose document the guard does not load",
-	"build_context":                          "names chunks, whose document the guard does not load",
-	"search_chunks_by_entities":              "searches chunks of every collection",
-	"search_paths":                           "walks the shared graph and may return chunk text of any collection",
-	"knowledge_memory_expand_entity_context": "returns chunk text of any collection",
-	"memory_list_all":                        "lists every bucket",
-	"changes_since":                          "feeds changes of every store and every collection",
-	"graph_health":                           "reports on every store",
-	"vector_dimension_repair":                "rewrites every store",
-	"sweep_expired":                          "removes expired rows of every store and every collection",
+	"cortex_query":                          "its graph prefetch searches chunks of every collection",
+	"knowledge_memory_consolidate":          "reads memories and writes a document, under promotion.*, in one call",
+	"knowledge_memory_promote_to_knowledge": "reads memories and writes a document in one call",
+	"knowledge_memory_reflect":              "reads both stores through recall.* with no gate of its own",
+	"get_chunks":                            "names chunks, whose document the guard does not load",
+	"build_context":                         "names chunks, whose document the guard does not load",
+	"find_nodes":                            "matches the content of every node, chunks of every collection included; it opens in a change of its own, once its matches pass the hidden-node filter",
+	"graph_list_all":                        "lists the whole stored graph, which the facade does not hold to a caller scope",
+	"graph_cypher_query":                    "queries the whole stored graph, which the facade does not hold to a caller scope",
+	"rank_graph_nodes":                      "ranks every node of the stored graph, which the facade does not hold to a caller scope",
+	"predict_graph_edges":                   "predicts edges from the whole stored graph, which the facade does not hold to a caller scope",
+	"disambiguate_mentions":                 "matches mentions against every entity of the stored graph, which the facade does not hold to a caller scope",
+	"graph_statistics":                      "counts the whole stored graph, which the facade does not hold to a caller scope",
+	"memory_list_all":                       "lists every bucket",
+	"changes_since":                         "feeds changes of every store and every collection",
+	"graph_health":                          "reports on every store",
+	"vector_dimension_repair":               "rewrites every store",
+	"sweep_expired":                         "removes expired rows of every store and every collection",
 }
 
 // defaultRefusal is why a tool with no reason of its own is refused: the
@@ -352,7 +384,7 @@ func (k Key) AuthorizeToolArgs(tool string, args []byte) error {
 				}
 			}
 		}
-		if other := rule.stores &^ confinedStore(c.field); other != 0 {
+		if other := rule.stores &^ confinedStore(c.field); other != 0 && !rule.facade {
 			gate := rule.gates[c.field]
 			if !gateOn(obj, gate) {
 				return fmt.Errorf("%w: key %q is confined to %s=%s and tool %s reads %s, which the call must switch off with %s=true",
@@ -687,6 +719,9 @@ func ConfinedToolsTable() string {
 			if g := r.gates[f]; g != "" {
 				gates = append(gates, fmt.Sprintf("%s → `%s=true`", f, g))
 			}
+		}
+		if r.facade {
+			gates = append(gates, "by the facade (CallerScope)")
 		}
 		var denied []string
 		for p := range r.denied {
