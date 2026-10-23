@@ -305,7 +305,7 @@ func TestDerivedEdgesCarryRuleProvenanceAndConfidence(t *testing.T) {
 			rule := mustParseRule(t, "mortality",
 				"IF instance_of(?x, ?c) AND subclass_of(?c, ?d) THEN instance_of(?x, ?d)")
 			rule.Confidence = 0.5
-			rule.Metadata = map[string]string{"note": "kept", "rule_id": "ignored"}
+			rule.Metadata = map[string]string{"note": "kept", "rule_id": "ignored", "chunk_ids": "x", "source_chunk_id": "y"}
 
 			result, err := b.store.ApplyRules(ctx, []Rule{rule}, RuleOptions{})
 			if err != nil {
@@ -323,6 +323,12 @@ func TestDerivedEdgesCarryRuleProvenanceAndConfidence(t *testing.T) {
 			}
 			if got, _ := edge.Properties["rule_id"].(string); got != "mortality" {
 				t.Errorf("rule_id %q — rule metadata must not be able to overwrite it", got)
+			}
+			// The provenance keys an edge is read by are the engine's too.
+			for _, k := range []string{"chunk_ids", "source_chunk_id"} {
+				if v, ok := edge.Properties[k]; ok {
+					t.Errorf("%s %v — rule metadata must not be able to set it", k, v)
+				}
 			}
 			if got, _ := edge.Properties["rule_text"].(string); got != rule.Text() {
 				t.Errorf("rule_text %q, want %q", got, rule.Text())
