@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 	"github.com/liliang-cn/cortexdb/v2/pkg/graph"
 	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 )
@@ -148,6 +149,12 @@ func (b *KnowledgeMemory) PromoteToKnowledge(ctx context.Context, req KnowledgeM
 		memoryResp, err := b.db.GetMemory(ctx, MemoryGetRequest{MemoryID: memoryID})
 		if err != nil {
 			return nil, err
+		}
+		// A memory outside the caller scope is answered as a missing one.
+		if ok, err := b.db.memoryReadPermitted(ctx, memoryResp.Memory.SessionID); err != nil {
+			return nil, err
+		} else if !ok {
+			return nil, core.ErrNotFound
 		}
 		// Promoted, a memory the gate hides would be served as knowledge
 		// before anyone accepts it.
