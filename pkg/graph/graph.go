@@ -315,19 +315,27 @@ func (g *GraphStore) createGraphSchema(ctx context.Context) error {
 	);
 
 	-- Indexes for performance
-	CREATE INDEX IF NOT EXISTS idx_edges_from ON graph_edges(from_node_id);
-	CREATE INDEX IF NOT EXISTS idx_edges_to ON graph_edges(to_node_id);
 	CREATE INDEX IF NOT EXISTS idx_edges_type ON graph_edges(edge_type);
 	CREATE INDEX IF NOT EXISTS idx_nodes_type ON graph_nodes(node_type);
 	CREATE INDEX IF NOT EXISTS idx_edges_composite ON graph_edges(from_node_id, edge_type);
 	-- Topology-covering indexes for walks (PersonalizedPageRank). A walk reads
 	-- every edge around a few thousand nodes and needs only these five
-	-- columns; through idx_edges_from/to each of those rows cost a lookup of
-	-- the full edge row, properties and vector included, and the walk spent
+	-- columns; through a single-column index each of those rows cost a lookup
+	-- of the full edge row, properties and vector included, and the walk spent
 	-- ~90%% of its time in those page reads. Answered from the index alone it
 	-- is ten times faster on a 6k-passage corpus.
 	CREATE INDEX IF NOT EXISTS idx_edges_walk_from ON graph_edges(from_node_id, to_node_id, edge_type, weight, id);
 	CREATE INDEX IF NOT EXISTS idx_edges_walk_to ON graph_edges(to_node_id, from_node_id, edge_type, weight, id);
+	-- No single-column index on from_node_id or to_node_id: idx_edges_composite
+	-- and idx_edges_walk_from lead with the first, idx_edges_walk_to with the
+	-- second, so a lookup by one endpoint (a read, the endpoint rewrite of a
+	-- merge, the foreign-key cascade of a node delete) seeks one of them.
+	-- Brains written before this release carry idx_edges_from and
+	-- idx_edges_to, which serve nothing the others do not and cost every
+	-- edge write and their space (34 MB of a 590 MB brain with 215,691
+	-- edges): they are dropped here.
+	DROP INDEX IF EXISTS idx_edges_from;
+	DROP INDEX IF EXISTS idx_edges_to;
 
 	-- Node properties indexed by IndexNodeProperty; see property_index.go.
 	CREATE TABLE IF NOT EXISTS graph_property_indexes (
