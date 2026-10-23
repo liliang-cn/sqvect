@@ -214,6 +214,11 @@ var confinedTools = map[string]toolRule{
 			"session_id": "names a memory bucket by its raw id, which reads another user's session",
 			"persist":    "writes entities to the shared graph and a document under an id the guard cannot see",
 		}},
+	// The sources a check cites are data, as plan.filters.document_ids is:
+	// the facade reads only the collection the scope check forces, so a
+	// source of another collection is missing, as one that does not exist.
+	"check_against_sources": {scope: collectionScope, stores: storeKnowledge,
+		args: []string{"sentences", "sentences[].text", "sentences[].sources", "equivalents.*"}},
 	// Knowledge, addressed by id alone: the row guard decides.
 	"knowledge_get":    {stores: storeKnowledge, ids: []idField{{"knowledge_id", idKnowledge}}},
 	"knowledge_delete": {stores: storeKnowledge, ids: []idField{{"knowledge_id", idKnowledge}}},

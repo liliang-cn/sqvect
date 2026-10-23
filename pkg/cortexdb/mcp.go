@@ -260,6 +260,9 @@ func (db *DB) NewMCPServer(opts MCPServerOptions) *mcp.Server {
 	addGraphRAGMCPTool(server, definitions["verify_claims"], func(ctx context.Context, req ToolVerifyClaimsRequest) (VerifyClaimsResult, error) {
 		return db.VerifyClaimsTool(ctx, req)
 	})
+	addGraphRAGMCPTool(server, definitions["check_against_sources"], func(ctx context.Context, req CheckAgainstSourcesRequest) (CheckAgainstSourcesResponse, error) {
+		return db.CheckAgainstSources(ctx, req)
+	})
 	addGraphRAGMCPTool(server, definitions["graph_health"], func(ctx context.Context, req ToolGraphHealthRequest) (GraphHealthReport, error) {
 		return db.GraphHealthTool(ctx, req)
 	})
