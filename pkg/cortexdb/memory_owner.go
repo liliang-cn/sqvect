@@ -18,6 +18,23 @@ import (
 // the user_id passes a policy that reads fields, and the session then reads
 // Zeus's rows. A recall names a user_id for its memory half and reaches every
 // collection with its knowledge half.
+//
+// The facade holds it on the memory buckets of memory_search, the memory half
+// of knowledge_memory_recall, knowledge_memory_build_context_pack,
+// knowledge_memory_reflect and knowledge_memory_consolidate, the list form of
+// memory_get, memory_list_all, knowledge_memory_promote_to_knowledge,
+// extract_conversation's session_id, and the bucket and supersedes of a save
+// (memory_save, knowledge_memory_remember); and on the collection of
+// knowledge_search, recall's knowledge half included. It does not hold on a
+// call that names one row by id (the single forms of memory_get and
+// knowledge_get, memory_update, memory_delete, knowledge_update,
+// knowledge_delete), which the ports' row guard checks; on DB.ListAllMemories,
+// the unpaged listing across all scopes that export and the maintenance
+// passes read; on the chunk readers (cortex_query, search_text, get_chunks,
+// knowledge_memory_expand_entity_context), which read chunks of any
+// collection; nor on the graph tools, whose nodes and edges carry no scope.
+// For a confined key the ports cover these: they refuse the tool, force its
+// collection or check the row (authz's allowlist).
 type CallerScope struct {
 	// Key names the caller. Identical searches that arrive together share
 	// one run (memory_search_coalesce.go), and two callers with different

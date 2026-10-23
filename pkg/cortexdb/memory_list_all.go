@@ -107,6 +107,7 @@ func (db *DB) ListAllMemoriesPaged(ctx context.Context, req MemoryListAllRequest
 	}
 
 	resp := &MemoryListAllResponse{Memories: []MemoryRecord{}}
+	permitted := map[string]bool{}
 	for len(resp.Memories) <= limit {
 		// Over-fetch by one so a full page can tell "exactly enough" from
 		// "there is more", without a second query.
@@ -116,6 +117,19 @@ func (db *DB) ListAllMemoriesPaged(ctx context.Context, req MemoryListAllRequest
 		}
 		for _, rec := range batch {
 			if memoryExpired(rec) {
+				continue
+			}
+			// A bucket the caller scope does not permit is skipped, as an
+			// expired row is. The answer is kept per bucket for this call.
+			ok, seen := permitted[rec.SessionID]
+			if !seen {
+				var err error
+				if ok, err = db.memoryReadPermitted(ctx, rec.SessionID); err != nil {
+					return nil, err
+				}
+				permitted[rec.SessionID] = ok
+			}
+			if !ok {
 				continue
 			}
 			resp.Memories = append(resp.Memories, rec)

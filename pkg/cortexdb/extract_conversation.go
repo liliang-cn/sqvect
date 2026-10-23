@@ -173,7 +173,17 @@ func (t *GraphRAGToolbox) ExtractConversation(ctx context.Context, req ToolExtra
 // loadSessionText concatenates a session's messages as "role: content" lines.
 // Under the review gate it leaves out the memories the gate hides: a summary
 // made of them, persisted, would serve their text as knowledge.
+//
+// Under a CallerScope that does not permit the session's bucket it loads
+// nothing, so the session answers as one that does not exist.
 func (t *GraphRAGToolbox) loadSessionText(ctx context.Context, sessionID string) (string, error) {
+	permitted, err := t.db.memoryReadPermitted(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("extract_conversation: load session: %w", err)
+	}
+	if !permitted {
+		return "", nil
+	}
 	gate := ""
 	if t.db.reviewGate {
 		status := t.db.Dialect().JSONTextGuarded("metadata", reviewStatusKey)
