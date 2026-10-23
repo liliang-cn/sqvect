@@ -50,6 +50,9 @@ var embeddedDataset []byte
 //go:embed testdata/dataset_zh.json
 var embeddedChineseDataset []byte
 
+//go:embed testdata/dataset_ch.json
+var embeddedSwissDataset []byte
+
 // Builtin returns the bundled retrieval-quality dataset.
 func Builtin() (*Dataset, error) {
 	return Parse(embeddedDataset)
@@ -60,6 +63,15 @@ func Builtin() (*Dataset, error) {
 // one word with a note at most.
 func BuiltinChinese() (*Dataset, error) {
 	return Parse(embeddedChineseDataset)
+}
+
+// BuiltinSwiss returns the bundled Swiss dataset: articles of the Federal
+// Constitution in its four official languages, queries in German, French and
+// Italian, each asked as written, without its accents, as the article's
+// heading with or without its accents, or with a word the article holds only
+// inside a compound.
+func BuiltinSwiss() (*Dataset, error) {
+	return Parse(embeddedSwissDataset)
 }
 
 // Parse decodes a Dataset from JSON and validates referential integrity: every
