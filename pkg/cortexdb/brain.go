@@ -312,6 +312,14 @@ func (b *KnowledgeMemory) Neighbors(ctx context.Context, req KnowledgeMemoryNeig
 	if err != nil {
 		return nil, err
 	}
+	resp := &KnowledgeMemoryNeighborsResponse{ResolvedNodeID: nodeID, Neighbors: []*graph.GraphNode{}}
+	served, err := b.db.servedSeeds(ctx, []string{nodeID})
+	if err != nil {
+		return nil, err
+	}
+	if len(served) == 0 {
+		return resp, nil
+	}
 	neighbors, err := b.db.Graph().Neighbors(ctx, nodeID, graph.TraversalOptions{
 		MaxDepth:  req.MaxDepth,
 		EdgeTypes: req.EdgeTypes,
@@ -325,11 +333,8 @@ func (b *KnowledgeMemory) Neighbors(ctx context.Context, req KnowledgeMemoryNeig
 	// The chunk and document nodes of an expired document are not
 	// neighbors of anything: the gate applies to the graph as to the chunks.
 	neighbors, _ = b.db.withoutExpiredDocuments(ctx, neighbors, nil, nil)
-
-	return &KnowledgeMemoryNeighborsResponse{
-		ResolvedNodeID: nodeID,
-		Neighbors:      neighbors,
-	}, nil
+	resp.Neighbors, _ = ofTypes(neighbors, nil, nil, nodeTypes, nil)
+	return resp, nil
 }
 
 // ShortestPath resolves and traverses the shortest path between two nodes or entities.
@@ -346,6 +351,18 @@ func (b *KnowledgeMemory) ShortestPath(ctx context.Context, req KnowledgeMemoryS
 		return nil, fmt.Errorf("from_node_id/to_node_id or from_entity_name/to_entity_name are required")
 	}
 
+	// An endpoint the caller's scope hides answers as one that does not
+	// exist, with the graph's own answers for it.
+	served, err := b.db.servedSeeds(ctx, []string{fromID, toID})
+	if err != nil {
+		return nil, err
+	}
+	if len(served) < 2 {
+		if fromID == toID {
+			return nil, fmt.Errorf("node not found: %s", fromID)
+		}
+		return nil, fmt.Errorf("no path found from %s to %s", fromID, toID)
+	}
 	path, err := b.db.Graph().ShortestPath(ctx, fromID, toID)
 	if err != nil {
 		return nil, err
@@ -358,7 +375,7 @@ func (b *KnowledgeMemory) ShortestPath(ctx context.Context, req KnowledgeMemoryS
 	if len(nodes) != len(path.Nodes) || len(edges) != len(path.Edges) {
 		return nil, fmt.Errorf("no path found from %s to %s", fromID, toID)
 	}
-	path.Edges = edges
+	path.Nodes, path.Edges = nodes, edges
 
 	return &KnowledgeMemoryShortestPathResponse{
 		FromNodeID: fromID,

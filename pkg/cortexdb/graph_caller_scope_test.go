@@ -109,7 +109,7 @@ func graphToolCalls() []graphToolCall {
 			// Given node ids alone, the tool names each node it reads after
 			// its content. entity_node_ids echoes the caller's own ids.
 			out, err := db.KnowledgeMemory().ExpandEntityContext(ctx, KnowledgeMemoryExpandEntityContextRequest{EntityIDs: []string{
-				graphChunkNodeID("a1", 0), graphChunkNodeID("b1", 0), memoryGraphNodeID("hermes-mem"), memoryGraphNodeID("zeus-mem"),
+				graphChunkNodeID("a1", 0), graphChunkNodeID("b1", 0), memoryGraphNodeID("hermes-mem"), memoryGraphNodeID("zeus-mem"), kv, EntityNodeID("Project Nightjar"),
 			}})
 			if out != nil {
 				out.EntityNodeIDs = nil
@@ -122,7 +122,7 @@ func graphToolCalls() []graphToolCall {
 		{name: "get_nodes", served: []string{"alpha mill", "delivers on Tuesdays"}, call: func(ctx context.Context, db *DB) (any, error) {
 			return db.GraphRAGTools().GetNodes(ctx, ToolGetNodesRequest{NodeIDs: []string{
 				graphChunkNodeID("a1", 0), graphChunkNodeID("b1", 0), graphDocumentNodeID("a1"), graphDocumentNodeID("b1"),
-				memoryGraphNodeID("zeus-mem"), memoryGraphNodeID("hermes-mem"),
+				memoryGraphNodeID("zeus-mem"), memoryGraphNodeID("hermes-mem"), kv, EntityNodeID("Project Nightjar"),
 			}})
 		}},
 		{name: "find_nodes", served: []string{"alpha mill", "delivers on Tuesdays"}, call: func(ctx context.Context, db *DB) (any, error) {
@@ -194,15 +194,17 @@ func TestUnderACallerScopeEveryGraphToolLeavesOutAnotherCollection(t *testing.T)
 	}
 }
 
-// Without a caller scope, under a scope that sets no rule, and under one
-// whose rules permit everything, every graph tool answers what it answered
-// before, out-of-scope rows included.
+// Without a caller scope, under a scope that sets no rule, and under a
+// memory rule that permits everything, every graph tool answers what it
+// answered before, out-of-scope rows included. Under a knowledge rule, even
+// one that permits every collection, an entity is served reduced
+// (TestUnderACallerScopeAnEntityKeepsOnlyItsIdAndName).
 func TestWithoutACallerScopeTheGraphToolsAnswerAsBefore(t *testing.T) {
 	db := scopedGraphBrain(t)
 	bg := context.Background()
 	open := map[string]context.Context{
-		"no rule":               WithCallerScope(bg, CallerScope{Key: "k"}),
-		"rules that permit all": WithCallerScope(bg, CallerScope{Key: "k", Knowledge: func(string) bool { return true }, Memory: func(MemoryBucket) bool { return true }}),
+		"no rule":                        WithCallerScope(bg, CallerScope{Key: "k"}),
+		"a memory rule that permits all": WithCallerScope(bg, CallerScope{Key: "k", Memory: func(MemoryBucket) bool { return true }}),
 	}
 	for _, tool := range graphToolCalls() {
 		t.Run(tool.name, func(t *testing.T) {
