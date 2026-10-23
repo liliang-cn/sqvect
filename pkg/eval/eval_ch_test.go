@@ -121,21 +121,21 @@ func TestSwissLexicalRetrievalQuality(t *testing.T) {
 }
 
 // swissFloors are a little under what each category measures today (recall@10,
-// MRR): plain 0.986, 0.926; unaccented 0.980, 0.908; heading 0.764, 0.698;
-// heading_unaccented 0.387, 0.349; compound 0.833, 0.524.
+// MRR): plain 0.986, 0.926; unaccented 1.000, 0.925; heading 0.764, 0.691;
+// heading_unaccented 0.806, 0.769; compound 0.833, 0.524.
 //
-// heading_unaccented is low because the coverage floor compares words with
-// their accents while the word index folds them: "Liberte economique" finds
-// "Liberté économique" in the index, and the floor then drops it. Its floor
-// holds today's value; it rises when the floor compares words as the index
-// does.
+// unaccented and heading_unaccented hold the coverage floor to comparing
+// words as the word index reads them, without their accents: "Liberte
+// economique" finds "Liberté économique" in the index, and when the floor
+// compared the words with their accents it dropped the row (0.980, 0.908 and
+// 0.387, 0.349).
 var swissFloors = []struct {
 	category      string
 	recall10, mrr float64
 }{
 	{"plain", 0.95, 0.90},
-	{"unaccented", 0.95, 0.88},
+	{"unaccented", 0.99, 0.91},
 	{"heading", 0.74, 0.67},
-	{"heading_unaccented", 0.35, 0.32},
+	{"heading_unaccented", 0.78, 0.74},
 	{"compound", 0.80, 0.50},
 }
