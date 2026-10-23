@@ -2,6 +2,7 @@
 package index
 
 import (
+	"bytes"
 	"container/heap"
 	"encoding/gob"
 	"errors"
@@ -249,8 +250,31 @@ func (h *HNSW) Load(r io.Reader) error {
 	h.EfConstruction = efConstruction
 	h.EntryPoint = entryPoint
 	h.Nodes = nodes
+	// The dimension is not in the snapshot, so it is read off the nodes. Left
+	// at zero, the first insert after a load decided it: one 64-d lexical
+	// vector written first, and every 768-d write for the life of the process
+	// was refused, logged at Warn, and absent from the next snapshot.
+	h.Dim = loadedDim(nodes)
 
 	return nil
+}
+
+// loadedDim is the one dimension the live float vectors of nodes share, or 0
+// when they have none in common (or keep only quantized codes): the next
+// insert then decides, as it did before.
+func loadedDim(nodes map[string]*HNSWNode) int {
+	dim := 0
+	for _, node := range nodes {
+		if node.Deleted || len(node.Vector) == 0 {
+			continue
+		}
+		if dim == 0 {
+			dim = len(node.Vector)
+		} else if len(node.Vector) != dim {
+			return 0
+		}
+	}
+	return dim
 }
 
 // levelMultiplier is HNSW's mL = 1/ln(M): a node reaches level l with
@@ -322,12 +346,59 @@ func (h *HNSW) liveNodeExistsLocked(id string) bool {
 	return false
 }
 
-// Insert adds a new vector to the index
+// Insert adds a new vector to the index. An id the index already holds is
+// refused; Upsert replaces it instead.
 func (h *HNSW) Insert(id string, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.mutations.Add(1)
+	return h.insertLocked(id, vector, false)
+}
 
+// Upsert adds a vector, or replaces the one a live node already holds under
+// id. This is what a store means when it writes a row with INSERT OR REPLACE:
+// re-embedding a chunk, or rewriting it with new content, keeps its id and
+// changes its vector. Insert refuses a live id, and every store write path
+// used to call it, so the index kept the old vector — a 64-d lexical one, on a
+// live brain whose rows had all been re-embedded at 768-d — while the table
+// held the new one, and the snapshot carried the old one forward from there.
+//
+// Writing the vector a node already holds changes nothing and costs no
+// mutation, so an idempotent re-upsert does not make the snapshot stale.
+func (h *HNSW) Upsert(id string, vector []float32) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if node, ok := h.Nodes[id]; ok && !node.Deleted && h.holdsLocked(node, vector) {
+		return nil
+	}
+	h.mutations.Add(1)
+	return h.insertLocked(id, vector, true)
+}
+
+// holdsLocked reports whether node already stores vector, as the index would
+// store it. The caller must hold h.mu.
+func (h *HNSW) holdsLocked(node *HNSWNode, vector []float32) bool {
+	if node.Vector != nil {
+		if len(node.Vector) != len(vector) {
+			return false
+		}
+		for i := range vector {
+			if node.Vector[i] != vector[i] {
+				return false
+			}
+		}
+		return true
+	}
+	if node.Quantized != nil && h.Quantizer != nil {
+		code, err := h.Quantizer.Encode(vector)
+		return err == nil && bytes.Equal(code, node.Quantized)
+	}
+	return false
+}
+
+// insertLocked is Insert, and with replace Upsert. The caller must hold h.mu
+// and count the mutation.
+func (h *HNSW) insertLocked(id string, vector []float32, replace bool) error {
 	if len(vector) == 0 {
 		return fmt.Errorf("vector for node %s is empty", id)
 	}
@@ -339,6 +410,15 @@ func (h *HNSW) Insert(id string, vector []float32) error {
 		h.Dim = len(vector)
 	} else if len(vector) != h.Dim {
 		return fmt.Errorf("vector for node %s has %d dimensions, index holds %d", id, len(vector), h.Dim)
+	}
+
+	// Replacing retires the live node first, the way Delete does, so the
+	// entry point moves off it; liveNodeExistsLocked then drops it and its
+	// links. Only after the checks above, so a rejected vector keeps the old.
+	if replace {
+		if node, ok := h.Nodes[id]; ok && !node.Deleted {
+			h.markDeletedLocked(id, node)
+		}
 	}
 
 	// Last of the checks: it drops a deleted node, which must only happen
@@ -665,7 +745,13 @@ func (h *HNSW) Delete(id string) error {
 	if !exists {
 		return errors.New("node not found")
 	}
+	h.markDeletedLocked(id, node)
+	return nil
+}
 
+// markDeletedLocked soft-deletes node and moves the entry point off it. The
+// caller must hold h.mu.
+func (h *HNSW) markDeletedLocked(id string, node *HNSWNode) {
 	node.Deleted = true
 
 	// If this was the entry point, find a new one
@@ -677,8 +763,35 @@ func (h *HNSW) Delete(id string) error {
 			}
 		}
 	}
+}
 
-	return nil
+// LiveNodeDims returns the id of every node that is not deleted, with the
+// dimension of the vector it holds: 0 for a node that keeps only a quantized
+// code. A store compares it with its table after loading a snapshot.
+func (h *HNSW) LiveNodeDims() map[string]int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	out := make(map[string]int, len(h.Nodes))
+	for id, node := range h.Nodes {
+		if !node.Deleted {
+			out[id] = len(node.Vector)
+		}
+	}
+	return out
+}
+
+// Tombstones is how many nodes are soft-deleted: still in the graph, walked
+// by every search, returned by none.
+func (h *HNSW) Tombstones() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	n := 0
+	for _, node := range h.Nodes {
+		if node.Deleted {
+			n++
+		}
+	}
+	return n
 }
 
 // Size returns the number of nodes in the index

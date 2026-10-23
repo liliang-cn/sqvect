@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The HNSW index loaded from its snapshot could stay far behind the table
+  and nobody noticed. On a copy of a live brain, 316 of 529 rows were
+  missing from the loaded index, 66 nodes still held 64-d lexical vectors
+  their rows had been re-embedded away from, and 1,296 of 1,509 nodes were
+  tombstones. Vector search matched brute force on 1 of 18 golden queries,
+  and knowledge hit@3 was 4/18. Opening a store now checks a loaded HNSW or
+  IVF snapshot against the table: missing rows are inserted, ids that are
+  gone are removed, and rows written since the snapshot are written again.
+  A snapshot that cannot be patched (mixed or foreign dimensions, more
+  tombstones than live nodes, or over 30% of rows off) is rebuilt. The
+  outcome is logged, to the standard logger when the store has no logger.
+  On the same copy: 18/18 and 16/18.
+- Writing a row the index already held kept the old vector. Re-embedding,
+  `UpsertBatch` and transactional upserts all go through `HNSW.Upsert` now,
+  which replaces the node, and treats an identical vector as no change.
+- A reloaded HNSW index lost its dimension, so the first insert after a
+  restart set it. One 64-d lexical vector written first, and every 768-d
+  write was refused until the next restart. `Load` now takes the dimension
+  from the nodes. A rebuild uses the dimension most rows have, not the
+  first row's.
+- `DeleteByDocID`, `ClearByDocID`, `Clear` and `DeleteCollection` now take
+  the deleted ids out of the in-memory indexes as well.
+
 ## [2.137.0] - 2026-10-23
 
 ### Added

@@ -142,7 +142,7 @@ func (s *SQLiteStore) Upsert(ctx context.Context, emb *Embedding) error {
 
 	// Update HNSW index if enabled
 	if s.config.HNSW.Enabled && s.hnswIndex != nil {
-		if err := s.hnswIndex.Insert(emb.ID, emb.Vector); err != nil {
+		if err := s.hnswIndex.Upsert(emb.ID, emb.Vector); err != nil {
 			s.logger.Warn("failed to insert vector into HNSW index", "id", emb.ID, "error", err)
 		}
 	}
@@ -288,7 +288,7 @@ func (s *SQLiteStore) UpsertBatch(ctx context.Context, embs []*Embedding) error 
 	if s.config.HNSW.Enabled && s.hnswIndex != nil {
 		var errorCount int
 		for _, emb := range embs {
-			if err := s.hnswIndex.Insert(emb.ID, emb.Vector); err != nil {
+			if err := s.hnswIndex.Upsert(emb.ID, emb.Vector); err != nil {
 				s.logger.Warn("failed to insert vector into HNSW index during batch upsert", "id", emb.ID, "error", err)
 				errorCount++
 			}
@@ -425,26 +425,16 @@ func (s *SQLiteStore) DeleteByDocID(ctx context.Context, docID string) error {
 		return wrapError("delete_by_doc_id", fmt.Errorf("doc ID cannot be empty"))
 	}
 
-	// The binary index answers with ids, so a deleted id left in it costs a
-	// result slot until the next rebuild; collect them before they are gone.
-	var binaryIDs []string
-	if s.currentBinaryIndex() != nil {
-		if rows, err := s.db.QueryContext(ctx, "SELECT id FROM embeddings WHERE doc_id = ?", docID); err == nil {
-			for rows.Next() {
-				var id string
-				if rows.Scan(&id) == nil {
-					binaryIDs = append(binaryIDs, id)
-				}
-			}
-			_ = rows.Close()
-		}
-	}
+	// The in-memory indexes answer with ids, so a deleted id left in one
+	// costs a result slot until the next rebuild; collect them before they
+	// are gone.
+	ids := s.idsToForget(ctx, s.db, "SELECT id FROM embeddings WHERE doc_id = ?", docID)
 
 	_, err := s.db.ExecContext(ctx, "DELETE FROM embeddings WHERE doc_id = ?", docID)
 	if err != nil {
 		return wrapError("delete_by_doc_id", fmt.Errorf("failed to delete embeddings: %w", err))
 	}
-	s.binaryDelete(binaryIDs...)
+	s.forgetIndexedIDs(ids)
 
 	return nil
 }
@@ -613,10 +603,12 @@ func (s *SQLiteStore) Clear(ctx context.Context) error {
 		return wrapError("clear", ErrStoreClosed)
 	}
 
+	ids := s.idsToForget(ctx, s.db, "SELECT id FROM embeddings")
 	_, err := s.db.ExecContext(ctx, "DELETE FROM embeddings")
 	if err != nil {
 		return wrapError("clear", fmt.Errorf("failed to clear embeddings: %w", err))
 	}
+	s.forgetIndexedIDs(ids)
 
 	s.logger.Info("cleared all embeddings")
 
@@ -659,10 +651,12 @@ func (s *SQLiteStore) ClearByDocID(ctx context.Context, docIDs []string) error {
 	}()
 
 	// Execute deletion for each doc ID
+	var ids []string
 	for _, docID := range docIDs {
 		if docID == "" {
 			continue // Skip empty doc IDs
 		}
+		ids = append(ids, s.idsToForget(ctx, tx, "SELECT id FROM embeddings WHERE doc_id = ?", docID)...)
 		_, err = stmt.ExecContext(ctx, docID)
 		if err != nil {
 			return wrapError("clear_by_doc_id", fmt.Errorf("failed to delete embeddings for doc_id %s: %w", docID, err))
@@ -673,6 +667,7 @@ func (s *SQLiteStore) ClearByDocID(ctx context.Context, docIDs []string) error {
 	if err := tx.Commit(); err != nil {
 		return wrapError("clear_by_doc_id", fmt.Errorf("failed to commit transaction: %w", err))
 	}
+	s.forgetIndexedIDs(ids)
 
 	s.logger.Debug("cleared embeddings by doc IDs", "count", len(docIDs))
 

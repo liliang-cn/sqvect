@@ -580,6 +580,22 @@ func (ivf *IVFIndex) Delete(id string) error {
 	return nil
 }
 
+// IDDims returns every id the index holds with its vector's dimension. A
+// store compares it with its table after loading a snapshot.
+func (ivf *IVFIndex) IDDims() map[string]int {
+	ivf.mu.RLock()
+	defer ivf.mu.RUnlock()
+	out := make(map[string]int, len(ivf.IDs))
+	for i, id := range ivf.IDs {
+		dim := 0
+		if i < len(ivf.Vectors) {
+			dim = len(ivf.Vectors[i])
+		}
+		out[id] = dim
+	}
+	return out
+}
+
 // Size returns the number of vectors in the index
 func (ivf *IVFIndex) Size() int {
 	ivf.mu.RLock()

@@ -105,7 +105,7 @@ func (s *SQLiteStore) UpsertMultiVector(ctx context.Context, entity *MultiVector
 
 		// Update HNSW index if enabled
 		if s.config.HNSW.Enabled && s.hnswIndex != nil {
-			if err := s.hnswIndex.Insert(compositeID, vector); err != nil {
+			if err := s.hnswIndex.Upsert(compositeID, vector); err != nil {
 				// Log error but don't fail the entire operation
 				_ = err
 			}

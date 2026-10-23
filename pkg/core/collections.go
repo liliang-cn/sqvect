@@ -244,6 +244,7 @@ func (s *SQLiteStore) DeleteCollection(ctx context.Context, name string) error {
 	}
 
 	// Delete all embeddings in the collection
+	ids := s.idsToForget(ctx, tx, "SELECT id FROM embeddings WHERE collection_id = ?", collectionID)
 	_, err = tx.ExecContext(ctx, "DELETE FROM embeddings WHERE collection_id = ?", collectionID)
 	if err != nil {
 		return wrapError("delete_collection", fmt.Errorf("failed to delete embeddings: %w", err))
@@ -259,6 +260,7 @@ func (s *SQLiteStore) DeleteCollection(ctx context.Context, name string) error {
 	if err := tx.Commit(); err != nil {
 		return wrapError("delete_collection", fmt.Errorf("failed to commit transaction: %w", err))
 	}
+	s.forgetIndexedIDs(ids)
 
 	return nil
 }

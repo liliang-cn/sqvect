@@ -67,7 +67,29 @@ func (s *SQLiteStore) initHNSWIndex(ctx context.Context) error {
 
 	if loaded {
 		s.logger.Info("HNSW index loaded from snapshot")
-		return nil
+		res, err := s.reconcileLoadedIndex(ctx, loadedIndex{
+			kind:       "HNSW",
+			live:       s.hnswIndex.LiveNodeDims(),
+			tombstones: s.hnswIndex.Tombstones(),
+			upsert:     s.hnswIndex.Upsert,
+			remove:     s.hnswIndex.Delete,
+		})
+		if err != nil {
+			s.logger.Warn("failed to reconcile HNSW snapshot, rebuilding", "error", err)
+			res.unusable = err.Error()
+		}
+		s.reportReconcile("HNSW", res)
+		if res.unusable == "" {
+			return nil
+		}
+		// Start over from an empty graph, keeping the quantizer the snapshot
+		// came with: it was trained on these rows.
+		s.hnswIndex = index.NewHNSW(s.config.HNSW.M, s.config.HNSW.EfConstruction, distFunc)
+		s.savedMutations.Store(0)
+		if s.quantizer != nil {
+			s.hnswIndex.SetQuantizer(s.quantizer)
+		}
+		return s.rebuildHNSWIndex(ctx)
 	}
 
 	// If quantization enabled but not loaded from snapshot, we need to train it before rebuilding
@@ -109,6 +131,20 @@ func (s *SQLiteStore) rebuildHNSWIndex(ctx context.Context) error {
 	}
 	s.logger.Info("rebuilding HNSW index from database")
 
+	// One graph holds one dimension, and the first vector inserted used to
+	// decide which: on a table that still held a few early 64-d rows beside
+	// hundreds of 768-d ones, rows in rowid order made it 64 and refused the
+	// rest. The dimension most rows have is the one worth indexing.
+	if s.hnswIndex.Dim == 0 {
+		if dims, _, err := s.tableVectorDims(ctx); err == nil {
+			s.hnswIndex.Dim = majorityDim(dims)
+			if len(dims) > 1 {
+				s.notice("stored vectors have more than one dimension; the HNSW index holds one",
+					"indexed_dim", s.hnswIndex.Dim, "rows_by_dim", dims)
+			}
+		}
+	}
+
 	rows, err := s.db.QueryContext(ctx, "SELECT id, vector FROM embeddings")
 	if err != nil {
 		return fmt.Errorf("failed to query existing vectors: %w", err)
@@ -120,7 +156,7 @@ func (s *SQLiteStore) rebuildHNSWIndex(ctx context.Context) error {
 		ID     string
 		Vector []float32
 	}, 0, chunk)
-	inserted := 0
+	inserted, refused := 0, 0
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -128,7 +164,8 @@ func (s *SQLiteStore) rebuildHNSWIndex(ctx context.Context) error {
 		if err := s.hnswIndex.InsertBatch(batch); err != nil {
 			for _, v := range batch {
 				if err := s.hnswIndex.Insert(v.ID, v.Vector); err != nil {
-					s.logger.Warn("failed to insert vector", "id", v.ID, "error", err)
+					s.logger.Debug("failed to insert vector", "id", v.ID, "error", err)
+					refused++
 				}
 			}
 		}
@@ -160,7 +197,12 @@ func (s *SQLiteStore) rebuildHNSWIndex(ctx context.Context) error {
 		return fmt.Errorf("error iterating rows: %w", err)
 	}
 	flush()
-	s.logger.Info("HNSW index rebuild complete", "inserted", inserted)
+	inserted -= refused
+	if refused > 0 {
+		s.notice("HNSW index rebuilt", "inserted", inserted, "refused", refused)
+	} else {
+		s.logger.Info("HNSW index rebuild complete", "inserted", inserted)
+	}
 	return nil
 }
 
@@ -195,6 +237,30 @@ func (s *SQLiteStore) initIVFIndex(ctx context.Context) error {
 
 	if loaded {
 		s.logger.Info("IVF index loaded from snapshot")
+		ivf := s.ivfIndex
+		res, err := s.reconcileLoadedIndex(ctx, loadedIndex{
+			kind:   "IVF",
+			live:   ivf.IDDims(),
+			upsert: ivf.Add, // Add replaces an id it already holds
+			remove: ivf.Delete,
+		})
+		if err != nil {
+			s.logger.Warn("failed to reconcile IVF snapshot, retraining", "error", err)
+			res.unusable = err.Error()
+		}
+		s.reportReconcile("IVF", res)
+		if res.unusable == "" {
+			return nil
+		}
+		s.savedMutations.Store(0)
+		if err := s.trainIVFLocked(ctx, nCentroids); err != nil {
+			// An untrained index is searched linearly: slower, never wrong.
+			s.logger.Warn("failed to retrain IVF index", "error", err)
+			s.ivfIndex = index.NewIVFIndex(s.config.VectorDim, nCentroids)
+			if s.config.IVF.NProbe > 0 {
+				s.ivfIndex.SetNProbe(s.config.IVF.NProbe)
+			}
+		}
 		return nil
 	}
 
@@ -215,7 +281,11 @@ func (s *SQLiteStore) TrainIndex(ctx context.Context, numCentroids int) error {
 	if s.closed {
 		return wrapError("train_index", ErrStoreClosed)
 	}
+	return s.trainIVFLocked(ctx, numCentroids)
+}
 
+// trainIVFLocked is TrainIndex for a caller that holds s.mu.
+func (s *SQLiteStore) trainIVFLocked(ctx context.Context, numCentroids int) error {
 	// Ensure we are in IVF mode
 	if s.config.IndexType != IndexTypeIVF {
 		return wrapError("train_index", fmt.Errorf("index type is not IVF"))

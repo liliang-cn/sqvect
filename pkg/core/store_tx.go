@@ -92,7 +92,7 @@ func (s *SQLiteStore) SyncUpsertedEmbeddings(ctx context.Context, embs []*Embedd
 			if emb == nil || emb.ID == "" {
 				continue
 			}
-			if err := s.hnswIndex.Insert(emb.ID, emb.Vector); err != nil {
+			if err := s.hnswIndex.Upsert(emb.ID, emb.Vector); err != nil {
 				s.logger.Warn("failed to insert vector into HNSW index after transactional upsert", "id", emb.ID, "error", err)
 			}
 		}
