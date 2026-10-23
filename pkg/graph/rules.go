@@ -67,8 +67,10 @@ type Atom struct {
 	Object    string `json:"object"`
 }
 
-// reservedRuleEdgeProperties are the property keys the engine writes itself.
-// Rule metadata carrying one of them is dropped rather than applied.
+// reservedRuleEdgeProperties are the property keys the engine writes itself,
+// and the provenance keys an edge is read by (document_id, chunk_ids,
+// source_chunk_id). Rule metadata carrying one of them is dropped rather
+// than applied.
 var reservedRuleEdgeProperties = map[string]struct{}{
 	"inferred":               {},
 	"provenance":             {},
@@ -78,6 +80,8 @@ var reservedRuleEdgeProperties = map[string]struct{}{
 	"support_relation_types": {},
 	"confidence":             {},
 	"document_id":            {},
+	"chunk_ids":              {},
+	"source_chunk_id":        {},
 }
 
 // ErrRuleCapExceeded reports that forward chaining stopped at a cap instead of

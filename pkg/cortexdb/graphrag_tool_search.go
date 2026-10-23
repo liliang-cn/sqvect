@@ -137,6 +137,11 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 
 // SearchChunksByEntities finds chunks that are linked to the requested entities.
 func (t *GraphRAGToolbox) SearchChunksByEntities(ctx context.Context, req ToolSearchChunksByEntitiesRequest) (*ToolSearchChunksByEntitiesResponse, error) {
+	return t.searchChunksByEntities(ctx, req, t.db.graph.Neighbors)
+}
+
+// searchChunksByEntities is SearchChunksByEntities over the walk neighbors.
+func (t *GraphRAGToolbox) searchChunksByEntities(ctx context.Context, req ToolSearchChunksByEntitiesRequest, neighbors func(context.Context, string, graph.TraversalOptions) ([]*graph.GraphNode, error)) (*ToolSearchChunksByEntitiesResponse, error) {
 	if len(req.EntityNames) == 0 {
 		return &ToolSearchChunksByEntitiesResponse{}, nil
 	}
@@ -151,7 +156,7 @@ func (t *GraphRAGToolbox) SearchChunksByEntities(ctx context.Context, req ToolSe
 	var firstErr error
 	for _, entityName := range req.EntityNames {
 		entityID := resolveEntityNodeID("", entityName)
-		neighbors, err := t.db.graph.Neighbors(ctx, entityID, graph.TraversalOptions{
+		reached, err := neighbors(ctx, entityID, graph.TraversalOptions{
 			MaxDepth:  req.MaxHops,
 			Direction: "both",
 			NodeTypes: []string{"chunk"},
@@ -163,7 +168,7 @@ func (t *GraphRAGToolbox) SearchChunksByEntities(ctx context.Context, req ToolSe
 			}
 			continue
 		}
-		for _, node := range neighbors {
+		for _, node := range reached {
 			scoreMap[node.ID] += 1.0
 		}
 	}

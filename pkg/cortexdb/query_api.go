@@ -321,16 +321,19 @@ func (db *DB) runQueryPrefetch(ctx context.Context, req QueryRequest, prefetch Q
 // entities. Entity nodes are shared by every collection, so a chunk reached
 // through one may sit in another collection than the one queried; with a
 // collection set, the lane keeps only the chunks of that collection, the same
-// check the graph expansion applies to its neighbours (chunksInScope).
+// check the graph expansion applies to its neighbours (chunksInScope), and
+// walks only what the collection may see (neighborsInCollection). The walk
+// takes a chunk by its document, the end check by its own row: a document
+// with chunks in two collections passes the first and not the second.
 func (db *DB) runGraphQueryPrefetch(ctx context.Context, collection string, entityNames []string, limit int, maxHops int) ([]core.ScoredEmbedding, error) {
 	if len(entityNames) == 0 {
 		return nil, nil
 	}
-	resp, err := db.GraphRAGTools().SearchChunksByEntities(ctx, ToolSearchChunksByEntitiesRequest{
+	resp, err := db.GraphRAGTools().searchChunksByEntities(ctx, ToolSearchChunksByEntitiesRequest{
 		EntityNames: entityNames,
 		TopK:        limit,
 		MaxHops:     maxHops,
-	})
+	}, db.graphLaneWalk(collection))
 	if err != nil {
 		return nil, err
 	}
