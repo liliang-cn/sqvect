@@ -239,7 +239,39 @@ func (db *DB) UpdateKnowledge(ctx context.Context, req KnowledgeUpdateRequest) (
 }
 
 // GetKnowledge fetches a durable knowledge item by ID.
+//
+// The list form lists a document the caller's scope does not reach under
+// missing, in the order asked, exactly as an id that names nothing: a
+// confined caller cannot tell the two apart. The single form stays
+// unconfined on purpose, as GetMemory's does: the row guard of the ports
+// (authz.Scope.GuardToolRows) reads through it.
 func (db *DB) GetKnowledge(ctx context.Context, req KnowledgeGetRequest) (*KnowledgeGetResponse, error) {
+	if len(req.KnowledgeIDs) > 0 {
+		resp := &KnowledgeGetResponse{}
+		for _, id := range req.KnowledgeIDs {
+			if id == "" {
+				resp.Missing = append(resp.Missing, id)
+				continue
+			}
+			record, err := db.loadKnowledgeRecord(ctx, id)
+			if errors.Is(err, core.ErrNotFound) {
+				resp.Missing = append(resp.Missing, id)
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if !knowledgeListed(ctx, record) {
+				resp.Missing = append(resp.Missing, id)
+				continue
+			}
+			resp.Knowledges = append(resp.Knowledges, *record)
+		}
+		if len(resp.Knowledges) > 0 {
+			resp.Knowledge = resp.Knowledges[0]
+		}
+		return resp, nil
+	}
 	record, err := db.loadKnowledgeRecord(ctx, req.KnowledgeID)
 	if err != nil {
 		return nil, err

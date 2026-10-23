@@ -118,3 +118,15 @@ func knowledgeReadPermitted(ctx context.Context, collection string) bool {
 	scope, ok := callerScopeOf(ctx)
 	return !ok || scope.Knowledge == nil || scope.Knowledge(collection)
 }
+
+// knowledgeListed reports whether the caller may read a document the list
+// form of GetKnowledge loaded. Under a knowledge scope a document without
+// chunks sits in no collection, and the row guard of the ports withholds it
+// from every confined key, so it is not listed either.
+func knowledgeListed(ctx context.Context, record *KnowledgeRecord) bool {
+	scope, ok := callerScopeOf(ctx)
+	if !ok || scope.Knowledge == nil {
+		return true
+	}
+	return len(record.ChunkIDs) > 0 && scope.Knowledge(record.Collection)
+}
