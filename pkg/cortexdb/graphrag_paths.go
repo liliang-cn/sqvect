@@ -256,14 +256,19 @@ func (t *GraphRAGToolbox) resolvePathSeeds(ctx context.Context, names, nodeIDs [
 			wanted = append(wanted, id)
 		}
 	}
+	// A seed the caller's scope hides is one that does not exist: it falls
+	// to the name lookup, or into unresolved, in its place.
 	existing := map[string]bool{}
 	if len(wanted) > 0 {
 		nodes, err := t.db.graph.GetNodesBatch(ctx, wanted)
 		if err != nil {
 			return nil, nil, fmt.Errorf("resolve path seeds: %w", err)
 		}
+		// The nodes were just read; should a second read fail, no seed is
+		// served, which fails closed.
+		served, _ := t.db.servedSeeds(ctx, wanted)
 		for _, n := range nodes {
-			existing[n.ID] = true
+			existing[n.ID] = slices.Contains(served, n.ID)
 		}
 	}
 	for _, id := range nodeIDs {
@@ -288,25 +293,69 @@ func (t *GraphRAGToolbox) resolvePathSeeds(ctx context.Context, names, nodeIDs [
 		}
 		lookup = append(lookup, name)
 	}
-	if len(lookup) > 0 {
-		found, err := t.FindNodes(ctx, ToolFindNodesRequest{Names: lookup, Limit: 1})
+	// A name the graph does not hold under its derived id is looked up, and
+	// its seed is the first exact or fold match the caller is served. A
+	// match the scope hides is passed over as one that does not exist, so
+	// the lookup asks for one match per name, then twice as many, until a
+	// served match is met, the matches turn weaker than fold, or none are
+	// left. Without a scope the first match is served, and one lookup is
+	// all it takes.
+	picked := map[string]PathSeed{}
+	for pending, limit := lookup, 1; len(pending) > 0; limit *= 2 {
+		found, err := t.FindNodes(ctx, ToolFindNodesRequest{Names: pending, Limit: limit})
 		if err != nil {
 			return nil, nil, fmt.Errorf("resolve path seeds: %w", err)
 		}
-		byName := map[string]ToolNodeNameMatch{}
+		var met []string
 		for _, m := range found.Matches {
-			byName[m.Name] = m
-		}
-		for _, name := range lookup {
-			m, ok := byName[name]
-			if !ok || len(m.Nodes) == 0 || (m.Match != "exact" && m.Match != "fold") {
-				unresolved = append(unresolved, name)
-				continue
+			for _, n := range m.Nodes {
+				met = append(met, n.ID)
 			}
-			add(PathSeed{Name: name, NodeID: m.Nodes[0].ID, Match: m.Match})
+		}
+		// The matches were just read; should a second read fail, none is
+		// served, which fails closed.
+		served, _ := t.db.servedSeeds(ctx, met)
+		pending = nil
+		for _, m := range found.Matches {
+			more := len(m.Nodes) == limit
+			for _, n := range m.Nodes {
+				strength := nameMatchStrength(m.Name, n.Content)
+				if strength == "" {
+					more = false
+					break
+				}
+				if slices.Contains(served, n.ID) {
+					picked[m.Name] = PathSeed{Name: m.Name, NodeID: n.ID, Match: strength}
+					more = false
+					break
+				}
+			}
+			if more {
+				pending = append(pending, m.Name)
+			}
+		}
+	}
+	for _, name := range lookup {
+		if seed, ok := picked[name]; ok {
+			add(seed)
+		} else {
+			unresolved = append(unresolved, name)
 		}
 	}
 	return seeds, unresolved, nil
+}
+
+// nameMatchStrength is how find_nodes matched a node's content to a name,
+// for the two strengths a path seed accepts: "exact" or "fold", and ""
+// for a weaker match.
+func nameMatchStrength(name, content string) string {
+	switch folded := foldName(name); {
+	case content == name:
+		return "exact"
+	case folded != "" && foldName(content) == folded:
+		return "fold"
+	}
+	return ""
 }
 
 // attachGraphRAGPaths fills result.Paths when the query asked for them.

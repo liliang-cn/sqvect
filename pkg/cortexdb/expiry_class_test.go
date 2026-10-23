@@ -179,6 +179,27 @@ func everyGatedToolHides(t *testing.T, db *DB, tools *GraphRAGToolbox, ctx conte
 			t.Errorf("%s did not return the live document either, so its check proves nothing: %.300s", d.Name, body)
 		}
 	}
+	// knowledge_memory_expand_entity_context also takes node ids alone, and
+	// then names each node it reads after its content: the expired chunk
+	// is not read.
+	out, err := tools.Call(ctx, "knowledge_memory_expand_entity_context", json.RawMessage(`{"entity_ids":["`+oldChunk+`","`+liveChunk+`"]}`))
+	if err != nil {
+		t.Fatalf("knowledge_memory_expand_entity_context by entity_ids: %v", err)
+	}
+	expanded, _ := out.(*KnowledgeMemoryExpandEntityContextResponse)
+	if expanded == nil {
+		t.Fatalf("knowledge_memory_expand_entity_context answered %T", out)
+	}
+	expanded.EntityNodeIDs = nil // the caller's own ids
+	body, _ := json.Marshal(expanded)
+	for _, leak := range leaks {
+		if strings.Contains(string(body), leak) {
+			t.Errorf("knowledge_memory_expand_entity_context by entity_ids returned the hidden document (%s): %.300s", leak, body)
+		}
+	}
+	if !strings.Contains(string(body), "teaches in Uppsala") {
+		t.Errorf("knowledge_memory_expand_entity_context by entity_ids did not return the live document either: %.300s", body)
+	}
 	sort.Strings(unclassified)
 	if len(unclassified) > 0 {
 		t.Errorf("read tools with no entry in readToolsAndTheExpiry: %v", unclassified)

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
@@ -167,10 +169,12 @@ func documentIDsOf(ids []string) []string {
 }
 
 // hiddenAmong is hiddenDocuments for a read path, with the review status
-// the filters ask for. On a brain whose documents cannot be read it is
-// advisory for the expiry, because the sweep is the guarantee, and closed
-// under the review gate or a status filter, whose whole point is to hide,
-// and which an outage must not lift: every document met is then hidden.
+// the filters ask for, plus the documents the caller's scope does not
+// reach (outOfScopeDocuments). On a brain whose documents cannot be read it
+// is advisory for the expiry, because the sweep is the guarantee, and closed
+// under the review gate, a status filter or a caller scope, whose whole
+// point is to hide, and which an outage must not lift: every document met
+// is then hidden.
 func (db *DB) hiddenAmong(ctx context.Context, filters *RetrievalFilters, ids []string) map[string]struct{} {
 	want := ""
 	if filters != nil {
@@ -178,16 +182,69 @@ func (db *DB) hiddenAmong(ctx context.Context, filters *RetrievalFilters, ids []
 	}
 	ids = documentIDsOf(ids)
 	hidden, err := db.hiddenDocuments(ctx, time.Now(), db.reviewHiddenPredicate(want), ids)
+	if err != nil && !db.reviewGate && want == "" {
+		hidden, err = map[string]struct{}{}, nil
+	}
+	if err == nil {
+		var scoped map[string]struct{}
+		scoped, err = db.outOfScopeDocuments(ctx, ids)
+		maps.Copy(hidden, scoped)
+	}
 	if err != nil {
-		if !db.reviewGate && want == "" {
-			return nil
-		}
 		hidden = make(map[string]struct{}, len(ids))
 		for _, id := range ids {
 			hidden[id] = struct{}{}
 		}
 	}
 	return hidden
+}
+
+// outOfScopeDocuments returns, among the given document ids, those the
+// caller's scope may not read. Without a caller scope, or under one with no
+// knowledge rule, it reads nothing and hides nothing.
+func (db *DB) outOfScopeDocuments(ctx context.Context, ids []string) (map[string]struct{}, error) {
+	scope, ok := callerScopeOf(ctx)
+	if !ok || scope.Knowledge == nil || len(ids) == 0 {
+		return nil, nil
+	}
+	query, args := documentCollectionsQuery(ids)
+	rows, err := db.query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load document collections: %w", err)
+	}
+	collections := make(map[string][]string, len(ids))
+	err = eachRow(rows, func() error {
+		var id, name string
+		err := rows.Scan(&id, &name)
+		collections[id] = append(collections[id], name)
+		return err
+	})
+	return outOfScope(ids, collections, scope.Knowledge), err
+}
+
+// documentCollectionsQuery reads the collection of every chunk of the given
+// documents. The documents table has no collection: a document is in the
+// collection of its chunks, on embeddings.collection_id.
+func documentCollectionsQuery(ids []string) (string, []any) {
+	placeholders, args := sqlPlaceholders(ids)
+	return `SELECT e.doc_id, COALESCE(c.name, '') FROM embeddings e
+		LEFT JOIN collections c ON c.id = e.collection_id
+		WHERE e.doc_id IN (` + placeholders + `)`, args
+}
+
+// outOfScope is the scope rule on the collections each document's chunks
+// are in: a document is out of scope when one of its chunks is in a
+// collection permits refuses, or when it has no chunk, since then nothing
+// says which collection it is in.
+func outOfScope(ids []string, collections map[string][]string, permits func(collection string) bool) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, id := range ids {
+		names := collections[id]
+		if len(names) == 0 || slices.ContainsFunc(names, func(name string) bool { return !permits(name) }) {
+			out[id] = struct{}{}
+		}
+	}
+	return out
 }
 
 // allowDocument is allowDocumentID plus the expiry rule: a chunk of an

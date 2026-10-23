@@ -23,7 +23,9 @@ type GraphNode struct {
 	NodeType   string                 `json:"node_type,omitempty"`
 	Properties map[string]interface{} `json:"properties,omitempty"`
 	CreatedAt  time.Time              `json:"created_at"`
-	UpdatedAt  time.Time              `json:"updated_at"`
+	// UpdatedAt is left out when zero: a node served without the time of
+	// its last write, such as an entity under a caller scope.
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 
 	// The bitemporal columns. See pkg/graph/temporal.go for what the two axes
 	// mean and why NULL is unbounded on all four.
