@@ -442,9 +442,9 @@ func TestAConfinedKeyDeclaresNoEntityOrRelationAndNoEngineKey(t *testing.T) {
 		{notes, "knowledge_update", `{"knowledge_id":"n1","collection":"notes","metadata":{"graph_kind":"entity"}}`, "metadata.graph_kind"},
 		{hermes, "memory_save", `{"memory_id":"m1","user_id":"hermes","content":"x","metadata":{"_anything":"x"}}`, "metadata._anything"},
 		// Who wrote a row is the engine's to record (cortexdb.WithWriter):
-		// ingest_document does not stamp it, so a confined key could sign
-		// a document as another key.
-		{notes, "ingest_document", `{"document_id":"n1","collection":"notes","content":"x","metadata":{"written_by":"zeus-key"}}`, "metadata.written_by"},
+		// the facade replaces the exact spelling only, so another spelling
+		// would sign a row as another key.
+		{notes, "ingest_document", `{"document_id":"n1","collection":"notes","content":"x","metadata":{"Written_By":"zeus-key"}}`, "metadata.written_by"},
 		{notes, "knowledge_update", `{"knowledge_id":"n1","collection":"notes","metadata":{"Updated_By":"zeus-key"}}`, "metadata.updated_by"},
 		{hermes, "memory_update", `{"memory_id":"m1","metadata":{"written_by":"zeus-key"}}`, "metadata.written_by"},
 	} {
@@ -463,6 +463,42 @@ func TestAConfinedKeyDeclaresNoEntityOrRelationAndNoEngineKey(t *testing.T) {
 	} {
 		if err := c.key.AuthorizeToolArgs(c.tool, []byte(c.args)); err != nil {
 			t.Errorf("%s %s: the caller's own data was refused: %v", c.key.ID, c.tool, err)
+		}
+	}
+}
+
+// The facade signs every write of a document (ingest_document,
+// knowledge_save, knowledge_update): written_by and updated_by are replaced
+// from the key. So the three document tools take them back under their exact
+// spelling, as a document read back carries them. Another spelling is not
+// replaced and stays refused, and so does a memory tool, which this rule
+// does not reach.
+func TestTheDocumentToolsTakeTheSignatureBack(t *testing.T) {
+	notes := Key{ID: "notes", Scope: Scope{Collection: "notes"}}
+	hermes := Key{ID: "hermes", Scope: Scope{UserID: "hermes"}}
+	for _, tool := range []string{"ingest_document", "knowledge_save", "knowledge_update"} {
+		id := "knowledge_id"
+		if tool == "ingest_document" {
+			id = "document_id"
+		}
+		args := `{"` + id + `":"n1","collection":"notes","content":"x","metadata":{"written_by":"zeus-key","updated_by":"zeus-key"}}`
+		if err := notes.AuthorizeToolArgs(tool, []byte(args)); err != nil {
+			t.Errorf("%s with the signature it read: %v, want it taken", tool, err)
+		}
+		for _, spelling := range []string{"Written_By", "UPDATED_BY"} {
+			args := strings.Replace(args, `"written_by":"zeus-key","updated_by":"zeus-key"`, `"`+spelling+`":"zeus-key"`, 1)
+			if err := notes.AuthorizeToolArgs(tool, []byte(args)); !errors.Is(err, ErrDenied) {
+				t.Errorf("%s with %s: %v, want a denial", tool, spelling, err)
+			}
+		}
+	}
+	for _, c := range []struct{ tool, args string }{
+		{"memory_save", `{"memory_id":"m1","user_id":"hermes","content":"x","metadata":{"written_by":"zeus-key"}}`},
+		{"knowledge_memory_remember", `{"memory_id":"m1","user_id":"hermes","content":"x","metadata":{"written_by":"zeus-key"}}`},
+		{"memory_update", `{"memory_id":"m1","metadata":{"updated_by":"zeus-key"}}`},
+	} {
+		if err := hermes.AuthorizeToolArgs(c.tool, []byte(c.args)); !errors.Is(err, ErrDenied) {
+			t.Errorf("%s with a signature: %v, want a denial", c.tool, err)
 		}
 	}
 }

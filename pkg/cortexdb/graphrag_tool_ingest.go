@@ -60,6 +60,9 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 	if err := carryExpiry(metadata, stored, req.ExpiresAt); err != nil {
 		return nil, err
 	}
+	// Signed as knowledge_save signs, before the comparison below: the same
+	// text by another key is written again, under that key.
+	stampWriter(ctx, metadata, plainString)
 	if err := setReview(ctx, metadata, stored, req.review()); err != nil {
 		return nil, err
 	}

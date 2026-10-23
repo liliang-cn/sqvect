@@ -1,6 +1,9 @@
 package cortexdb
 
-import "context"
+import (
+	"context"
+	"maps"
+)
 
 // The metadata keys a save records its writer under. A recall shows them, so a
 // memory that answers wrongly can be traced to whoever wrote it.
@@ -12,16 +15,26 @@ const (
 type writerContextKey struct{}
 
 // WithWriter names who is writing through ctx: a server puts the identity it
-// authenticated there, and SaveMemory, UpdateMemory, SaveKnowledge and
-// UpdateKnowledge record it on the row. Whatever a caller wrote under those
-// keys itself is replaced, so a client cannot write as someone else. Without a
-// writer in ctx (an embedded library, a server without keys) the metadata is
-// stored as given.
+// authenticated there, and SaveMemory, UpdateMemory, SaveKnowledge,
+// UpdateKnowledge, ingest_document, InsertGraphDocument, InsertText and
+// InsertTextBatch record it on the row. Whatever a caller wrote under those
+// keys itself is replaced, so a client cannot write as someone else. Without
+// a writer in ctx (an embedded library, a server without keys) the metadata
+// is stored as given.
 func WithWriter(ctx context.Context, name string) context.Context {
 	if name == "" {
 		return ctx
 	}
 	return context.WithValue(ctx, writerContextKey{}, name)
+}
+
+// WriterKeys are the metadata keys a writer is recorded under. The facade
+// replaces them on every write of a document's or a text's metadata
+// (ingest_document, InsertGraphDocument, InsertText, InsertTextBatch,
+// SaveKnowledge, UpdateKnowledge) and of a memory's (SaveMemory,
+// UpdateMemory) when a writer is in ctx.
+func WriterKeys() []string {
+	return []string{metadataWrittenBy, metadataUpdatedBy}
 }
 
 func writerOf(ctx context.Context) string {
@@ -59,3 +72,17 @@ func stampUpdater[V any](ctx context.Context, metadata map[string]V, before map[
 func anyString(s string) any { return s }
 
 func plainString(s string) string { return s }
+
+// signedCopy returns metadata signed by the writer of ctx, on a copy: the
+// caller's map is its own. Without a writer it returns metadata as given.
+func signedCopy(ctx context.Context, metadata map[string]string) map[string]string {
+	if writerOf(ctx) == "" {
+		return metadata
+	}
+	signed := maps.Clone(metadata)
+	if signed == nil {
+		signed = map[string]string{}
+	}
+	stampWriter(ctx, signed, plainString)
+	return signed
+}

@@ -14,13 +14,12 @@ import (
 	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 )
 
-// The facade signs SaveKnowledge, UpdateKnowledge, SaveMemory and
-// UpdateMemory itself (cortexdb.WithWriter): whatever a caller sends under
-// written_by or updated_by is replaced. So these four typed writes take the
-// two keys from a confined key, and a row read back and sent again is not
-// refused for the signature it carries. InsertGraphDocument is not signed,
-// so it still refuses them, and so does a key the facade does not replace
-// (another spelling).
+// The facade signs SaveKnowledge, UpdateKnowledge, SaveMemory, UpdateMemory
+// and InsertGraphDocument itself (cortexdb.WithWriter): whatever a caller
+// sends under written_by or updated_by is replaced. So these five typed
+// writes take the two keys from a confined key, and a row read back and sent
+// again is not refused for the signature it carries. A key the facade does
+// not replace (another spelling) is still refused.
 func TestATypedWriteTakesTheSignatureTheFacadeReplaces(t *testing.T) {
 	ks, err := authz.NewKeySet([]authz.Key{
 		{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite},
@@ -74,13 +73,20 @@ func TestATypedWriteTakesTheSignatureTheFacadeReplaces(t *testing.T) {
 		t.Errorf("the memory is signed %v / %v, want hermes / hermes", m["written_by"], m["updated_by"])
 	}
 
+	// InsertGraphDocument is signed by the facade too, so it takes both
+	// keys. This server has no embedder: the call fails after the
+	// authorization, and only a refusal fails here.
+	if _, err := graphrag.InsertGraphDocument(asKey("notes-secret"), &rpcv1.InsertGraphDocumentRequest{Id: "n2", Collection: "notes", Content: "x", Metadata: forged}); status.Code(err) == codes.PermissionDenied {
+		t.Errorf("InsertGraphDocument refused the signature the facade replaces: %v", err)
+	}
+
 	for _, c := range []struct {
 		what string
 		err  error
 		want string
 	}{
-		{"InsertGraphDocument", func() error {
-			_, err := graphrag.InsertGraphDocument(asKey("notes-secret"), &rpcv1.InsertGraphDocumentRequest{Id: "n2", Collection: "notes", Content: "x", Metadata: map[string]string{"written_by": "operator"}})
+		{"InsertGraphDocument, another spelling", func() error {
+			_, err := graphrag.InsertGraphDocument(asKey("notes-secret"), &rpcv1.InsertGraphDocumentRequest{Id: "n2", Collection: "notes", Content: "x", Metadata: map[string]string{"Written_By": "operator"}})
 			return err
 		}(), "metadata.written_by"},
 		{"SaveKnowledge, another spelling", func() error {

@@ -72,11 +72,11 @@ func TestATypedKnowledgeWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 	}
 }
 
-// The tool route takes back the marks too. A document written by
-// ingest_document carries them and no signature, and main lets a confined
-// key send its metadata back to ingest_document, knowledge_save and
-// knowledge_update. The facade writes its own marks over the sent ones on
-// all three, so they are not refused, and the forged values are not kept.
+// The tool route takes back the marks too, and the signature. A document
+// written by ingest_document carries them, and a confined key may send its
+// metadata back to ingest_document, knowledge_save and knowledge_update. The
+// facade writes its own marks and signature over the sent ones on all three,
+// so they are not refused, and the forged values are not kept.
 func TestAToolWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 	ks, err := authz.NewKeySet([]authz.Key{
 		{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite},
@@ -115,6 +115,10 @@ func TestAToolWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 		}
 		engine[k], stored[k] = stored[k], "forged"
 	}
+	if stored["written_by"] != "notes" {
+		t.Fatalf("the ingested document is signed %v, want notes: %v", stored["written_by"], stored)
+	}
+	stored["written_by"], stored["updated_by"] = "forged", "forged"
 	for _, c := range []struct {
 		tool, id string
 		content  bool
@@ -133,10 +137,57 @@ func TestAToolWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 				t.Errorf("after %s, %s is %v, want the engine's %v", c.tool, k, after[k], v)
 			}
 		}
+		updatedBy := any(nil)
+		if c.tool == "knowledge_update" {
+			updatedBy = "notes"
+		}
+		if after["written_by"] != "notes" || after["updated_by"] != updatedBy {
+			t.Errorf("after %s, the document is signed %v / %v, want notes / %v", c.tool, after["written_by"], after["updated_by"], updatedBy)
+		}
 	}
 	status, payload := do(t, srv, http.MethodPost, "/v1/tools/ingest_document", "notes-secret",
 		`{"document_id":"d2","collection":"notes","content":"x","metadata":{"_Content_SHA256":"forged"}}`)
 	if status != http.StatusForbidden {
 		t.Errorf("another spelling of a mark: %d %s, want 403", status, payload)
+	}
+	for _, c := range []struct{ tool, id string }{{"ingest_document", "document_id"}, {"knowledge_save", "knowledge_id"}, {"knowledge_update", "knowledge_id"}} {
+		tool := c.tool
+		status, payload := do(t, srv, http.MethodPost, "/v1/tools/"+tool, "notes-secret",
+			`{"`+c.id+`":"d1","collection":"notes","content":"x","metadata":{"Written_By":"forged"}}`)
+		if status != http.StatusForbidden || !strings.Contains(errorMessage(t, payload), "metadata.written_by") {
+			t.Errorf("%s with another spelling of the signature: %d %s, want 403 naming metadata.written_by", tool, status, payload)
+		}
+	}
+}
+
+// A key with no collection scope may name written_by on ingest_document, as
+// on knowledge_save: the facade replaces it with the key, so the document
+// cannot be signed as anyone else.
+func TestAnIngestByAnUnconfinedKeyIsSignedByTheKey(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newPolicyServer(t, Options{Keys: ks})
+	wantStatus(t, srv, http.MethodPost, "/v1/tools/ingest_document", "op-secret",
+		`{"document_id":"d1","content":"Orpheus plays.","author":"zeus","metadata":{"written_by":"zeus","updated_by":"zeus"}}`, http.StatusOK)
+	status, payload := do(t, srv, http.MethodGet, "/v1/knowledge?knowledge_id=d1", "op-secret", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET: %d %s", status, payload)
+	}
+	var got struct {
+		Knowledge struct {
+			Author   string         `json:"author"`
+			Metadata map[string]any `json:"metadata"`
+		} `json:"knowledge"`
+	}
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	if m := got.Knowledge.Metadata; m["written_by"] != "operator" || m["updated_by"] != nil {
+		t.Errorf("the document is signed %v / %v, want operator and no updated_by", m["written_by"], m["updated_by"])
+	}
+	if got.Knowledge.Author != "zeus" {
+		t.Errorf("author = %q, want the caller's zeus kept", got.Knowledge.Author)
 	}
 }
