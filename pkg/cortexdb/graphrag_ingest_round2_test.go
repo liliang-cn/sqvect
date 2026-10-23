@@ -318,7 +318,7 @@ func TestTheIngestMarksNeverOverwriteACallersKey(t *testing.T) {
 			t.Errorf("%s: the marks are not the engine's: %v", what, stored)
 		}
 		for key := range stored {
-			if strings.HasPrefix(key, "_") && key != contentHashKey && key != chunkSizeKey && key != chunkOverlapKey {
+			if strings.HasPrefix(key, "_") && key != contentHashKey && key != chunkSizeKey && key != chunkOverlapKey && key != vectorsKey {
 				t.Errorf("%s: unexpected engine key %s", what, key)
 			}
 		}

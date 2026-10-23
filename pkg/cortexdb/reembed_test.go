@@ -300,3 +300,143 @@ func TestARepairChangesOnlyTheVector(t *testing.T) {
 		t.Fatalf("the repair changed the row: doc_id=%q metadata=%v acl=%v, was metadata=%v", after.DocID, after.Metadata, after.ACL, before.Metadata)
 	}
 }
+
+// With an embedder, ingest_document embeds its chunks as knowledge_save does.
+// It used to write lexical vectors of another width, which the vector index
+// refused, so every chunk it stored was invisible to semantic search (#84).
+func TestIngestDocumentEmbedsWithTheEmbedder(t *testing.T) {
+	emb := &fixedDimEmbedder{dim: 8}
+	db := newReembedDB(t, emb)
+	ctx := context.Background()
+	if _, err := db.GraphRAGTools().IngestDocument(ctx, ToolIngestDocumentRequest{
+		DocumentID: "ingested", Content: "The ledger moves on Sunday.", Collection: "kb",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if emb.calls == 0 {
+		t.Fatal("ingest_document did not call the embedder")
+	}
+	var id string
+	if err := db.store.GetDB().QueryRowContext(ctx, `SELECT id FROM embeddings WHERE doc_id = 'ingested' LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	chunk, err := db.store.GetByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunk.Vector) != 8 {
+		t.Fatalf("chunk vector has %d dimensions, want the embedder's 8", len(chunk.Vector))
+	}
+	report, err := db.DimensionReport(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.NeedsRepair() {
+		t.Fatalf("the dimension report flags rows ingest_document just wrote: %+v", report)
+	}
+}
+
+// A document stored before the embedder was configured is not "unchanged" to
+// an ingest that would embed it: the same text is stored again with the
+// embedder's vectors, instead of keeping vectors the index refuses.
+func TestALexicallyStoredDocumentIsReembeddedOnItsNextIngest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "lexical-first.db")
+	lexical, err := Open(DefaultConfig(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := ToolIngestDocumentRequest{DocumentID: "doc", Content: "The ledger moves on Sunday.", Collection: "notes"}
+	ctx := context.Background()
+	if _, err := lexical.GraphRAGTools().IngestDocument(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if err := lexical.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	emb := &fixedDimEmbedder{dim: 8}
+	embedded, err := Open(DefaultConfig(path), WithEmbedder(emb))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer embedded.Close()
+	resp, err := embedded.GraphRAGTools().IngestDocument(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Unchanged || emb.calls == 0 {
+		t.Fatalf("the re-ingest kept the lexical vectors: unchanged=%v embedder calls=%d", resp.Unchanged, emb.calls)
+	}
+	// And now that it is embedded, the same ingest is unchanged.
+	again, err := embedded.GraphRAGTools().IngestDocument(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Unchanged {
+		t.Fatal("an identical ingest after the re-embedding was not unchanged")
+	}
+}
+
+// A repair before this fix left chunk rows without their document and their
+// metadata. The repair now gives both back, from the chunk id and the
+// document record, so search reports the chunk's source again and the expiry
+// and review gates, which find a chunk's document by doc_id, see it again.
+func TestARepairRestoresChunksAnEarlierRepairStripped(t *testing.T) {
+	db := newReembedDB(t, &fixedDimEmbedder{dim: 8})
+	ctx := context.Background()
+	if _, err := db.SaveKnowledge(ctx, KnowledgeSaveRequest{
+		KnowledgeID: "doc:a", Title: "Ledger", Collection: "kb", Content: "The ledger moves on Sunday.",
+		Metadata: map[string]string{"source": "wiki"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := db.store.GetDB().QueryRowContext(ctx, `SELECT id FROM embeddings WHERE doc_id = 'doc:a' LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	// What the old repair wrote back: the vector, and nothing else.
+	if _, err := db.store.GetDB().ExecContext(ctx, `UPDATE embeddings SET doc_id = NULL, metadata = '{}' WHERE id = ?`, id); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := db.ReembedMismatchedVectors(ctx, ReembedOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Restored != 1 {
+		t.Fatalf("restored %d rows, want 1: %+v", report.Restored, report)
+	}
+	got, err := db.store.GetByID(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"graph_kind": "chunk", "document_id": "doc:a", "chunk_index": "0", "title": "Ledger", "source": "wiki"}
+	if got.DocID != "doc:a" {
+		t.Fatalf("doc_id = %q, want doc:a", got.DocID)
+	}
+	for k, v := range want {
+		if got.Metadata[k] != v {
+			t.Fatalf("metadata[%s] = %q, want %q (all: %v)", k, got.Metadata[k], v, got.Metadata)
+		}
+	}
+}
+
+func TestParseChunkIDTakesTheIndexAfterTheLastColon(t *testing.T) {
+	for id, want := range map[string]struct {
+		doc   string
+		index int
+		ok    bool
+	}{
+		"chunk:doc-1:000":       {"doc-1", 0, true},
+		"chunk:noted:a:b:012":   {"noted:a:b", 12, true},
+		"chunk:doc-1:1001":      {"doc-1", 1001, true},
+		"chunk::000":            {"", 0, false},
+		"node:doc-1:000":        {"", 0, false},
+		"chunk:doc-1:not-index": {"", 0, false},
+	} {
+		doc, index, ok := parseChunkID(id)
+		if doc != want.doc || index != want.index || ok != want.ok {
+			t.Errorf("parseChunkID(%q) = %q, %d, %v; want %q, %d, %v", id, doc, index, ok, want.doc, want.index, want.ok)
+		}
+	}
+}

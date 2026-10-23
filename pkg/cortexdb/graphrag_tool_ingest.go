@@ -14,7 +14,9 @@ import (
 	"github.com/liliang-cn/cortexdb/v2/pkg/graph"
 )
 
-// IngestDocument stores lexical chunks and graph nodes without requiring an embedder.
+// IngestDocument stores a document's chunks and graph nodes. With an embedder
+// the chunks are embedded as knowledge_save embeds them; without one they get
+// lexical vectors, so the tool works on a brain that has no embedder at all.
 func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocumentRequest) (*ToolIngestDocumentResponse, error) {
 	if req.DocumentID == "" {
 		return nil, fmt.Errorf("document_id is required")
@@ -44,7 +46,7 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 	if metadata == nil {
 		metadata = map[string]string{}
 	}
-	stampIngestMarks(metadata, req.Content, ingestOpts)
+	t.db.stampIngestMarks(metadata, req.Content, ingestOpts)
 	contentHash := metadata[contentHashKey]
 
 	existing, err := t.db.store.GetDocument(ctx, req.DocumentID)
@@ -101,11 +103,13 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 		}
 	}
 
-	vectorDim, err := t.lexicalVectorDim(ctx, ingestOpts.Collection)
+	// The vectors come from where knowledge_save takes them: the embedder
+	// when there is one, so a document ingested here is found by the same
+	// semantic search as one saved there, and lexical vectors otherwise. With
+	// an embedder this used to write lexical vectors of another width, which
+	// the vector index refused, so every ingested chunk was invisible to it.
+	chunkVectors, docVector, err := t.documentVectors(ctx, ingestOpts.Collection, firstNonEmpty(req.Title, req.Content), chunks)
 	if err != nil {
-		return nil, err
-	}
-	if err := t.ensureLexicalCollection(ctx, ingestOpts.Collection, vectorDim); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +155,7 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 	docProps["title"] = req.Title
 	plan.graphOps.NodeUpserts = append(plan.graphOps.NodeUpserts, &graph.GraphNode{
 		ID:         docNodeID,
-		Vector:     lexicalVectorForText(firstNonEmpty(req.Title, req.Content), vectorDim),
+		Vector:     docVector,
 		Content:    firstNonEmpty(req.Title, req.Content),
 		NodeType:   "document",
 		Properties: docProps,
@@ -174,7 +178,7 @@ func (t *GraphRAGToolbox) IngestDocument(ctx context.Context, req ToolIngestDocu
 			}
 		}
 
-		chunkVector := lexicalVectorForText(chunk, vectorDim)
+		chunkVector := chunkVectors[i]
 		plan.embeddings = append(plan.embeddings, &core.Embedding{
 			ID:         chunkID,
 			Collection: ingestOpts.Collection,
@@ -252,6 +256,12 @@ const (
 	contentHashKey  = "_content_sha256"
 	chunkSizeKey    = "_chunk_size"
 	chunkOverlapKey = "_chunk_overlap"
+	// vectorsKey says how the chunks' vectors were made: "embedder:<dim>",
+	// or "lexical" without an embedder. Two ingests of the same text agree on
+	// "unchanged" only when they would also make the same vectors, so a
+	// document stored before an embedder was configured is re-embedded the
+	// next time it is ingested rather than kept with vectors the index refuses.
+	vectorsKey = "_vectors"
 )
 
 // EngineDocumentKeys are the metadata keys the facade rewrites on every
@@ -264,7 +274,7 @@ const (
 // them. Other engine keys, such as importflow's _table, are not rewritten
 // and are not listed.
 func EngineDocumentKeys() []string {
-	return []string{contentHashKey, chunkSizeKey, chunkOverlapKey, expiresAtKey, reviewStatusKey, reviewedByKey, reviewedAtKey}
+	return []string{contentHashKey, chunkSizeKey, chunkOverlapKey, vectorsKey, expiresAtKey, reviewStatusKey, reviewedByKey, reviewedAtKey}
 }
 
 // EngineMemoryKeys are the metadata keys the facade rewrites on every write
@@ -281,14 +291,55 @@ func contentSHA256(content string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// stampIngestMarks writes the hash of content and the resolved chunking into
-// metadata. Every path that (re)builds a document's chunks calls it, so the
-// three keys always describe the chunks that are stored, whatever a caller
-// put under their names.
-func stampIngestMarks(metadata map[string]string, content string, opts GraphRAGIngestOptions) {
+// stampIngestMarks writes the hash of content, the resolved chunking and the
+// source of the vectors into metadata. Every path that (re)builds a
+// document's chunks calls it, so the keys always describe the chunks that are
+// stored, whatever a caller put under their names.
+func (db *DB) stampIngestMarks(metadata map[string]string, content string, opts GraphRAGIngestOptions) {
 	metadata[contentHashKey] = contentSHA256(content)
 	metadata[chunkSizeKey] = strconv.Itoa(opts.ChunkSize)
 	metadata[chunkOverlapKey] = strconv.Itoa(opts.ChunkOverlap)
+	metadata[vectorsKey] = db.vectorSource()
+}
+
+// vectorSource is the value of the _vectors mark for a write made now.
+func (db *DB) vectorSource() string {
+	if db.HasEmbedder() {
+		return "embedder:" + strconv.Itoa(db.embedder.Dim())
+	}
+	return "lexical"
+}
+
+// documentVectors makes a document's chunk vectors and its node's vector:
+// with the embedder, the chunks' embeddings and their average, as
+// knowledge_save makes them; without it, lexical vectors of the collection's
+// width. The collection is created for the vectors' width if it is missing.
+func (t *GraphRAGToolbox) documentVectors(ctx context.Context, collection, docText string, chunks []string) ([][]float32, []float32, error) {
+	if t.db.HasEmbedder() {
+		if err := t.db.ensureGraphRAGCollection(ctx, collection); err != nil {
+			return nil, nil, err
+		}
+		chunkVectors, err := t.db.embedder.EmbedBatch(ctx, chunks)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: %v", ErrEmbeddingFailed, err)
+		}
+		if len(chunkVectors) != len(chunks) {
+			return nil, nil, fmt.Errorf("%w: %d vectors for %d chunks", ErrEmbeddingFailed, len(chunkVectors), len(chunks))
+		}
+		return chunkVectors, averageVectors(chunkVectors, t.db.embedder.Dim()), nil
+	}
+	vectorDim, err := t.lexicalVectorDim(ctx, collection)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := t.ensureLexicalCollection(ctx, collection, vectorDim); err != nil {
+		return nil, nil, err
+	}
+	chunkVectors := make([][]float32, len(chunks))
+	for i, chunk := range chunks {
+		chunkVectors[i] = lexicalVectorForText(chunk, vectorDim)
+	}
+	return chunkVectors, lexicalVectorForText(docText, vectorDim), nil
 }
 
 // graphNodesPresent reports whether every one of ids is a live graph node.

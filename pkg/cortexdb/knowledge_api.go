@@ -46,7 +46,7 @@ func (db *DB) SaveKnowledge(ctx context.Context, req KnowledgeSaveRequest) (*Kno
 	if err := setReview(ctx, metadata, storedMetadata(existing), req.review()); err != nil {
 		return nil, err
 	}
-	stampIngestMarks(metadata, req.Content, resolvedIngestOptions(req.Collection, req.ChunkSize, req.ChunkOverlap))
+	db.stampIngestMarks(metadata, req.Content, resolvedIngestOptions(req.Collection, req.ChunkSize, req.ChunkOverlap))
 	version := 1
 	if existing != nil {
 		version = existing.Version + 1
@@ -162,7 +162,7 @@ func (db *DB) UpdateKnowledge(ctx context.Context, req KnowledgeUpdateRequest) (
 		if metadata == nil {
 			metadata = map[string]string{}
 		}
-		stampIngestMarks(metadata, content, resolvedIngestOptions(collection, chunkSize, chunkOverlap))
+		db.stampIngestMarks(metadata, content, resolvedIngestOptions(collection, chunkSize, chunkOverlap))
 		plan, err := db.buildKnowledgeMutationPlan(ctx, knowledgeMutationInput{
 			KnowledgeID:  req.KnowledgeID,
 			Title:        title,

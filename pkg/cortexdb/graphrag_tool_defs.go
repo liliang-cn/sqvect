@@ -24,7 +24,7 @@ func (t *GraphRAGToolbox) Definitions() []ToolDefinition {
 		{
 			Name:        "ingest_document",
 			Mutates:     true,
-			Description: "Store a document, split it into chunks, index it lexically, and create document/chunk graph nodes.",
+			Description: "Store a document, split it into chunks, index them for search (embedded with the configured embedder, lexical vectors without one), and create document/chunk graph nodes.",
 			InputSchema: toolObjectSchema(
 				[]string{"document_id", "content"},
 				map[string]any{

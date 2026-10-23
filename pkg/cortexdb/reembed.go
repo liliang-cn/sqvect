@@ -2,7 +2,10 @@ package cortexdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
 )
@@ -25,8 +28,11 @@ type ReembedReport struct {
 	Failed     int  `json:"failed"`
 	DryRun     bool `json:"dryRun"`
 	// Collections whose declared dimension was brought in line with their contents.
-	Reconciled int      `json:"reconciled"`
-	Errors     []string `json:"errors,omitempty"`
+	Reconciled int `json:"reconciled"`
+	// Chunk rows an earlier repair had stripped of their document and
+	// metadata, given them back from the chunk id and the document record.
+	Restored int      `json:"restored"`
+	Errors   []string `json:"errors,omitempty"`
 }
 
 // ReembedMismatchedVectors recomputes vectors whose stored dimensionality differs from
@@ -118,8 +124,104 @@ func (db *DB) ReembedMismatchedVectors(ctx context.Context, opts ReembedOptions)
 		} else {
 			report.Reconciled = reconciled
 		}
+		restored, err := db.restoreStrippedChunks(ctx)
+		report.Restored = restored
+		if err != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("restore stripped chunks: %v", err))
+		}
 	}
 	return report, nil
+}
+
+// restoreStrippedChunks gives back to chunk rows what a repair before v2.137.0
+// took from them. That repair wrote each row back with its id, content and
+// collection alone, so the chunk lost the document it belongs to and its
+// metadata: search could no longer report where a hit came from, and the
+// expiry and review gates, which find a chunk's document by doc_id, let it
+// through. A chunk's id names its document (graphChunkNodeID), and the
+// document record keeps its title and metadata, which is what ingest copied
+// onto each chunk, so both come back. Its ACL does not: no other row kept it.
+// A row whose document is gone, or whose id is not a chunk id, is left alone.
+func (db *DB) restoreStrippedChunks(ctx context.Context) (int, error) {
+	rows, err := db.query(ctx, `SELECT id FROM embeddings WHERE (doc_id IS NULL OR doc_id = '') AND id LIKE 'chunk:%'`)
+	if err != nil {
+		return 0, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	restored := 0
+	var restoredRows []*core.Embedding
+	for _, id := range ids {
+		docID, index, ok := parseChunkID(id)
+		if !ok {
+			continue
+		}
+		doc, err := db.store.GetDocument(ctx, docID)
+		if errors.Is(err, core.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return restored, err
+		}
+		row, err := db.store.GetByID(ctx, id)
+		if err != nil {
+			return restored, err
+		}
+		row.DocID = docID
+		if len(row.Metadata) == 0 {
+			metadata := map[string]string{
+				"graph_kind":  "chunk",
+				"document_id": docID,
+				"chunk_index": strconv.Itoa(index),
+				"title":       doc.Title,
+			}
+			for k, v := range anyMapToStringMap(doc.Metadata) {
+				if !recordOnlyKey(k) {
+					metadata[k] = v
+				}
+			}
+			row.Metadata = metadata
+		}
+		restoredRows = append(restoredRows, row)
+		restored++
+	}
+	if len(restoredRows) == 0 {
+		return 0, nil
+	}
+	if err := db.store.UpsertBatch(ctx, restoredRows); err != nil {
+		return 0, err
+	}
+	return restored, nil
+}
+
+// parseChunkID reads the document id and the chunk index out of a chunk id
+// made by graphChunkNodeID: "chunk:<document id>:<index>". The document id
+// may itself hold colons; the index is what follows the last one.
+func parseChunkID(id string) (string, int, bool) {
+	rest, ok := strings.CutPrefix(id, "chunk:")
+	if !ok {
+		return "", 0, false
+	}
+	i := strings.LastIndexByte(rest, ':')
+	if i <= 0 {
+		return "", 0, false
+	}
+	index, err := strconv.Atoi(rest[i+1:])
+	if err != nil || index < 0 {
+		return "", 0, false
+	}
+	return rest[:i], index, true
 }
 
 // DimensionReport surfaces vector-dimension drift across the store, so a caller can see
