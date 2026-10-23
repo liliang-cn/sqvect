@@ -126,15 +126,20 @@ func (t *GraphRAGToolbox) FindNodes(ctx context.Context, req ToolFindNodesReques
 			}
 			return hits[i].id < hits[j].id
 		})
-		if len(hits) > limit {
-			hits = hits[:limit]
-		}
-		match := ToolNodeNameMatch{Name: name, Nodes: make([]*graph.GraphNode, 0, len(hits))}
-		if len(hits) > 0 {
-			match.Match = [...]string{"exact", "fold", "contains"}[hits[0].rank]
-			ids := make([]string, 0, len(hits))
-			for _, h := range hits {
+		// A hidden node is not a match: the chunk and document nodes of an
+		// expired document, or of one the review gate hides, and a memory
+		// the gate hides, are left out as get_nodes leaves them out. They
+		// are taken out a window at a time, before the limit, so they do
+		// not use it up, and the strength of the answer is that of the
+		// first node served.
+		match := ToolNodeNameMatch{Name: name, Nodes: make([]*graph.GraphNode, 0, min(limit, len(hits)))}
+		for start := 0; start < len(hits) && len(match.Nodes) < limit; start += limit {
+			window := hits[start:min(start+limit, len(hits))]
+			ids := make([]string, 0, len(window))
+			rank := make(map[string]int, len(window))
+			for _, h := range window {
 				ids = append(ids, h.id)
+				rank[h.id] = h.rank
 			}
 			nodes, err := t.db.graph.GetNodesBatch(ctx, ids)
 			if err != nil {
@@ -147,10 +152,18 @@ func (t *GraphRAGToolbox) FindNodes(ctx context.Context, req ToolFindNodesReques
 			for _, node := range nodes {
 				byID[node.ID] = node
 			}
+			ordered := make([]*graph.GraphNode, 0, len(ids))
 			for _, id := range ids {
 				if node, ok := byID[id]; ok {
-					match.Nodes = append(match.Nodes, node)
+					ordered = append(ordered, node)
 				}
+			}
+			kept, _ := t.db.withoutExpiredDocuments(ctx, ordered, nil, nil)
+			for _, node := range kept[:min(len(kept), limit-len(match.Nodes))] {
+				if len(match.Nodes) == 0 {
+					match.Match = [...]string{"exact", "fold", "contains"}[rank[node.ID]]
+				}
+				match.Nodes = append(match.Nodes, node)
 			}
 		}
 		response.Matches = append(response.Matches, match)

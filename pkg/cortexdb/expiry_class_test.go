@@ -19,6 +19,7 @@ var readToolsAndTheExpiry = map[string]string{
 	"build_context":                          "gated",
 	"cortex_query":                           "gated",
 	"expand_graph":                           "gated",
+	"find_nodes":                             "gated",
 	"get_chunks":                             "gated",
 	"get_nodes":                              "gated",
 	"knowledge_search":                       "gated",
@@ -58,7 +59,6 @@ var readToolsAndTheExpiry = map[string]string{
 
 	"disambiguate_mentions": "entities and relations",
 	"fact_provenance":       "entities and relations: names the chunk ids, reports an expired one missing",
-	"find_nodes":            "entities and relations",
 	"inference_explain":     "entities and relations",
 	"uncited_facts":         "entities and relations",
 	"verify_claims":         "entities and relations",
@@ -125,6 +125,7 @@ func everyGatedToolHides(t *testing.T, db *DB, tools *GraphRAGToolbox, ctx conte
 			"entity_names": []string{"Arvid Lund"}, "entity_name": "Arvid Lund", "top_k": 10, "max_hops": 2, "detail": "full",
 			"chunk_ids": []string{oldChunk, liveChunk}, "node_ids": []string{entity, oldChunk, oldDoc, liveChunk},
 			"from_node_id": from, "to_node_id": to, "group_by": "title",
+			"names": []string{"Arvid Lund"},
 		}
 		if name == "search_paths" {
 			delete(a, "node_ids")
