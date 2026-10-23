@@ -622,6 +622,11 @@ func JSONPathValues(args []byte, path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return valuesAt(obj, path), nil
+}
+
+// valuesAt is JSONPathValues on decoded arguments.
+func valuesAt(obj map[string]any, path string) []string {
 	seen := map[string]bool{}
 	for _, v := range pathValues(obj, strings.Split(path, ".")) {
 		if v != "" {
@@ -633,7 +638,54 @@ func JSONPathValues(args []byte, path string) ([]string, error) {
 		out = append(out, v)
 	}
 	sort.Strings(out)
-	return out, nil
+	return out
+}
+
+// rowData are the data arguments that name rows without the guard loading
+// them: the list form of memory_get, which the facade answers with missing,
+// and plan.filters.document_ids, a pin the collection filter decides. The
+// request log records them beside the ids the guard loads.
+var rowData = []string{"memory_ids", "plan.filters.document_ids"}
+
+// rowPaths are the argument paths of the tool that name rows: its ids, and
+// the rowData it takes.
+func (r toolRule) rowPaths() []string {
+	var out []string
+	for _, id := range r.ids {
+		out = append(out, id.path)
+	}
+	for _, p := range rowData {
+		if slices.Contains(r.args, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// RowIDsOf returns the ids a call to the tool names in its arguments, by
+// path, for the request log to say what a call reached for: the values at
+// the paths the allowlist declares for the tool (rowPaths), read as
+// JSONPathValues reads them: the distinct ids, sorted. A tool off the
+// allowlist, arguments that are not a JSON object, and a call that names no
+// row give nil. It reads the arguments only, for any key; it decides
+// nothing.
+func RowIDsOf(tool string, args []byte) map[string][]string {
+	rule, ok := confinedTools[tool]
+	if !ok {
+		return nil
+	}
+	// Arguments that are not an object decode to none, and name no row.
+	obj, _ := argsObject(args)
+	var out map[string][]string
+	for _, p := range rule.rowPaths() {
+		if ids := valuesAt(obj, p); len(ids) > 0 {
+			if out == nil {
+				out = map[string][]string{}
+			}
+			out[p] = ids
+		}
+	}
+	return out
 }
 
 func pathValues(v any, segments []string) []string {

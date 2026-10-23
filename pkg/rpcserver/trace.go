@@ -13,7 +13,9 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/liliang-cn/cortexdb/v2/pkg/authz"
 	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
+	rpcv1 "github.com/liliang-cn/cortexdb/v2/pkg/rpc/v1"
 )
 
 // The request log: one line per call, with where its time went.
@@ -22,7 +24,8 @@ import (
 // CORTEXDB_SLOW_MS, 1000 by default, 0 to log none — because a server that
 // says nothing about a 24-second recall leaves its clients guessing which of
 // three machines to blame. CORTEXDB_TRACE_FILE appends the same records as
-// JSON lines.
+// JSON lines. A CallTool's record also names the rows its arguments name
+// (ids), so a trace file says what a key reached for, not only which tool.
 
 // TraceOptions configures RequestLogInterceptor.
 type TraceOptions struct {
@@ -56,14 +59,28 @@ func TraceOptionsFromEnv() TraceOptions {
 }
 
 type traceRecord struct {
-	TS     string           `json:"ts"`
-	Method string           `json:"method"`
-	Key    string           `json:"key,omitempty"`
-	Tool   string           `json:"tool,omitempty"`
-	DurMs  int64            `json:"dur_ms"`
-	Stages map[string]int64 `json:"stages_ms,omitempty"`
-	Err    string           `json:"err,omitempty"`
+	TS     string `json:"ts"`
+	Method string `json:"method"`
+	Key    string `json:"key,omitempty"`
+	Tool   string `json:"tool,omitempty"`
+	// IDs are the rows a CallTool names in its arguments, by path
+	// (authz.RowIDsOf): the ids, distinct and sorted before the cut, at
+	// most maxTraceIDs per path, each cut at maxTraceIDBytes. IDsOmitted
+	// counts the ones left out.
+	IDs        map[string][]string `json:"ids,omitempty"`
+	IDsOmitted int                 `json:"ids_omitted,omitempty"`
+	DurMs      int64               `json:"dur_ms"`
+	Stages     map[string]int64    `json:"stages_ms,omitempty"`
+	Err        string              `json:"err,omitempty"`
 }
+
+// maxTraceIDs bounds the ids a record keeps per path, and maxTraceIDBytes
+// the length of each. The log runs before authentication, so without them
+// any caller could write a list of any length to the trace file.
+const (
+	maxTraceIDs     = 100
+	maxTraceIDBytes = 256
+)
 
 // callerTag is what the request log learns about a call after it has started
 // timing it: which key spoke. The log runs outside the policy gate (see
@@ -128,8 +145,11 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 		}
 		key := tag.keyID()
 		tool := ""
+		var ids map[string][]string
 		if info.FullMethod == callToolMethod {
 			tool, _ = requestToolName(req)()
+			call, _ := req.(*rpcv1.CallToolRequest)
+			ids = authz.RowIDsOf(tool, []byte(call.GetArgsJson()))
 		}
 		line := "cortexdb-trace rpc=" + method + " dur=" + strconv.FormatFloat(dur.Seconds(), 'f', 2, 64) + "s"
 		if key != "" {
@@ -137,6 +157,10 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 		}
 		if tool != "" {
 			line += " tool=" + tool
+		}
+		// The count only: the ids themselves go to the trace file.
+		if n := idCount(ids); n > 0 {
+			line += " ids=" + strconv.Itoa(n)
 		}
 		if s := stages.String(); s != "" {
 			line += " " + s
@@ -150,6 +174,7 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 		logger.Print(line)
 		if o.File != nil {
 			rec := traceRecord{TS: start.UTC().Format(time.RFC3339Nano), Method: method, Key: key, Tool: tool, DurMs: dur.Milliseconds(), Stages: stages.Millis()}
+			rec.IDs, rec.IDsOmitted = boundIDs(ids)
 			if err != nil {
 				rec.Err = err.Error()
 			}
@@ -161,4 +186,32 @@ func RequestLogInterceptor(o TraceOptions) grpc.UnaryServerInterceptor {
 		}
 		return resp, err
 	}
+}
+
+func idCount(ids map[string][]string) int {
+	n := 0
+	for _, v := range ids {
+		n += len(v)
+	}
+	return n
+}
+
+// boundIDs keeps the first maxTraceIDs ids of each path, cuts each at
+// maxTraceIDBytes on a character boundary with a mark, and counts the ids
+// left out.
+func boundIDs(ids map[string][]string) (map[string][]string, int) {
+	omitted := 0
+	for p, v := range ids {
+		if len(v) > maxTraceIDs {
+			omitted += len(v) - maxTraceIDs
+			v = v[:maxTraceIDs]
+		}
+		for i, id := range v {
+			if len(id) > maxTraceIDBytes {
+				v[i] = strings.ToValidUTF8(id[:maxTraceIDBytes], "") + "…"
+			}
+		}
+		ids[p] = v
+	}
+	return ids, omitted
 }
