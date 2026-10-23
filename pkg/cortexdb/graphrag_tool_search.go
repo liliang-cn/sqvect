@@ -147,39 +147,74 @@ func (t *GraphRAGToolbox) SearchChunksByEntities(ctx context.Context, req ToolSe
 		req.MaxHops = 1
 	}
 
-	scoreMap := make(map[string]float64)
-	var firstErr error
-	for _, entityName := range req.EntityNames {
-		entityID := resolveEntityNodeID("", entityName)
-		neighbors, err := t.db.graph.Neighbors(ctx, entityID, graph.TraversalOptions{
-			MaxDepth:  req.MaxHops,
-			Direction: "both",
-			NodeTypes: []string{"chunk"},
-			Limit:     req.TopK * 8,
-		})
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
+	// The walk keeps the first top_k*8 nodes it meets per entity, in edge
+	// order, before any chunk is loaded. The chunks are loaded, and the
+	// hidden ones left out, before the cut to top_k, so a hidden chunk does
+	// not use up the caller's limit. When hidden chunks also used up the
+	// walk's pool, the walk is taken again with twice the pool, until top_k
+	// is filled or no walk was cut. Past maxChunkWalkPool the walk has no
+	// limit (pool 0), as a top_k*8 that overflows had on main, so the loop
+	// ends. A cancelled call ends it too: every walk then fails, and a
+	// failure on every name is the answer.
+	for pool := chunkWalkPool(req.TopK); ; pool = widerChunkWalkPool(pool) {
+		scoreMap := make(map[string]float64)
+		var firstErr error
+		cut := false
+		for _, entityName := range req.EntityNames {
+			entityID := resolveEntityNodeID("", entityName)
+			neighbors, err := t.db.graph.Neighbors(ctx, entityID, graph.TraversalOptions{
+				MaxDepth:  req.MaxHops,
+				Direction: "both",
+				Limit:     pool,
+			})
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
-			continue
+			// The type is read here, not by the walk, so the length of the
+			// walk tells whether its limit cut it.
+			cut = cut || (pool > 0 && len(neighbors) >= pool)
+			for _, node := range neighbors {
+				if node.NodeType == "chunk" {
+					scoreMap[node.ID] += 1.0
+				}
+			}
 		}
-		for _, node := range neighbors {
-			scoreMap[node.ID] += 1.0
+		if len(scoreMap) == 0 && firstErr != nil {
+			return nil, firstErr
+		}
+		chunks, err := t.loadToolChunks(ctx, scoreMap, sortIDsByScore(scoreMap), true, maxEntitiesPerChunk(RetrievalModeGraph, false, 0))
+		if err != nil {
+			return nil, err
+		}
+		if len(chunks) >= req.TopK || !cut {
+			return &ToolSearchChunksByEntitiesResponse{Chunks: chunks[:min(len(chunks), req.TopK)]}, nil
 		}
 	}
-	if len(scoreMap) == 0 && firstErr != nil {
-		return nil, firstErr
-	}
+}
 
-	ordered := sortIDsByScore(scoreMap)
-	if len(ordered) > req.TopK {
-		ordered = ordered[:req.TopK]
+// maxChunkWalkPool is the largest pool a walk of search_chunks_by_entities
+// takes; past it the walk has no limit.
+const maxChunkWalkPool = 1 << 20
+
+// chunkWalkPool is the first pool of a walk for top_k: top_k*8, or no limit
+// (0) when that passes maxChunkWalkPool, overflow included.
+func chunkWalkPool(topK int) int {
+	if topK > maxChunkWalkPool/8 {
+		return 0
 	}
-	chunks, err := t.loadToolChunks(ctx, scoreMap, ordered, true, maxEntitiesPerChunk(RetrievalModeGraph, false, 0))
-	if err != nil {
-		return nil, err
+	return topK * 8
+}
+
+// widerChunkWalkPool doubles a pool, up to no limit (0) past
+// maxChunkWalkPool.
+func widerChunkWalkPool(pool int) int {
+	if pool > maxChunkWalkPool/2 {
+		return 0
 	}
-	return &ToolSearchChunksByEntitiesResponse{Chunks: chunks}, nil
+	return pool * 2
 }
 
 // ExpandGraph expands a graph neighborhood and returns a materialized subgraph.
@@ -250,7 +285,8 @@ func (t *GraphRAGToolbox) ExpandGraph(ctx context.Context, req ToolExpandGraphRe
 }
 
 // withoutExpiredDocuments drops from a subgraph the document and chunk nodes
-// of an expired document, the memory nodes the review gate hides, the edges
+// of a hidden document (expired, held by the review gate, or out of the
+// caller's scope), the memory nodes the review gate or the scope hides, the edges
 // that touch them and their scores: the graph is the one place a search
 // could otherwise still reach a hidden passage, through the entities it
 // mentions.
@@ -293,12 +329,14 @@ func (db *DB) withoutExpiredDocuments(ctx context.Context, nodes []*graph.GraphN
 	return keptNodes, db.withoutExpiredProvenance(ctx, keptEdges)
 }
 
-// hiddenMemoryNodes is the set of memory nodes the review gate leaves out of
-// a walk, read one memory at a time: a walk meets few. A memory that cannot
-// be read is hidden, as a document is, so an outage does not lift the gate.
+// hiddenMemoryNodes is the set of memory nodes the review gate, or the
+// caller scope's memory rule, leaves out of a walk, read one memory at a
+// time: a walk meets few. A memory that cannot be read is hidden, as a
+// document is, so an outage does not lift the gate or the scope.
 func (db *DB) hiddenMemoryNodes(ctx context.Context, nodes []*graph.GraphNode) map[string]struct{} {
 	hidden := map[string]struct{}{}
-	if !db.reviewGate {
+	scope, _ := callerScopeOf(ctx)
+	if !db.reviewGate && scope.Memory == nil {
 		return hidden
 	}
 	for _, node := range nodes {
@@ -306,12 +344,22 @@ func (db *DB) hiddenMemoryNodes(ctx context.Context, nodes []*graph.GraphNode) m
 		if !ok {
 			continue
 		}
-		if row, err := db.loadMemoryRow(ctx, memoryID); err == nil && !reviewHides(row.record.ReviewStatus) {
+		if row, err := db.loadMemoryRow(ctx, memoryID); err == nil && db.memoryNodeShown(ctx, row) {
 			continue
 		}
 		hidden[node.ID] = struct{}{}
 	}
 	return hidden
+}
+
+// memoryNodeShown reports whether a walk may show the memory row: the
+// review gate, when it is on, and the caller's memory rule let it through.
+func (db *DB) memoryNodeShown(ctx context.Context, row *memoryRow) bool {
+	if db.reviewGate && reviewHides(row.record.ReviewStatus) {
+		return false
+	}
+	permitted, _ := db.memoryReadPermitted(ctx, row.record.SessionID)
+	return permitted
 }
 
 // withoutExpiredProvenance takes out of each edge's provenance (chunk_ids,
@@ -341,13 +389,13 @@ func (db *DB) withoutExpiredProvenance(ctx context.Context, edges []*graph.Graph
 	}
 	docOf := map[string]string{}
 	// A chunk whose node cannot be read is shown under the expiry alone,
-	// which is advisory, and hidden under the review gate, which fails
-	// closed, as hiddenAmong does.
+	// which is advisory, and hidden under the review gate or a caller
+	// scope's knowledge rule, which fail closed, as hiddenAmong does.
 	unreadable := false
 	if len(chunkIDs) > 0 {
 		chunks, err := db.graph.GetNodesBatch(ctx, chunkIDs)
 		if err != nil {
-			if !db.reviewGate {
+			if scope, _ := callerScopeOf(ctx); !db.reviewGate && scope.Knowledge == nil {
 				return edges
 			}
 			unreadable = true

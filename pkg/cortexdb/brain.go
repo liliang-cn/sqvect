@@ -616,6 +616,9 @@ func (b *KnowledgeMemory) resolveEntityInputs(ctx context.Context, entityIDs, en
 		if err != nil {
 			return nil, nil, err
 		}
+		// A hidden node lends no name: its content is the passage or the
+		// memory the gate, the expiry or the caller's scope hides.
+		nodes, _ = b.db.withoutExpiredDocuments(ctx, nodes, nil, nil)
 		for _, node := range nodes {
 			if strings.TrimSpace(node.Content) != "" {
 				names = append(names, node.Content)
