@@ -25,10 +25,12 @@ type Options struct {
 	Token string
 	// KeyFile is the path to a JSON file of scoped API keys. When set it is
 	// the entire policy and Token is ignored — see authz.Resolve for why
-	// honouring both would defeat the point.
+	// honouring both would defeat the point. The server reads it again when
+	// it changes (authz.KeySource); a change that does not load leaves the
+	// keys in force.
 	KeyFile string
 	// Keys is a pre-loaded policy, for callers that build one in process.
-	// It takes precedence over Token and KeyFile.
+	// It takes precedence over Token and KeyFile, and is never reread.
 	Keys *authz.KeySet
 	// Interceptors are chained BEFORE authorization, so they observe every
 	// call including the ones policy rejects. Metrics and tracing go here
@@ -67,15 +69,15 @@ func New(db *cortexdb.DB, opts Options) *grpc.Server {
 
 // NewWithPolicy is New, reporting a key-file load failure to the caller.
 func NewWithPolicy(db *cortexdb.DB, opts Options) (*grpc.Server, error) {
-	keys := opts.Keys
-	if keys == nil {
+	src := authz.StaticKeySource(opts.Keys)
+	if opts.Keys == nil {
 		var err error
-		keys, err = authz.Resolve(opts.KeyFile, opts.Token)
+		src, err = authz.ResolveSource(opts.KeyFile, opts.Token)
 		if err != nil {
 			return nil, err
 		}
 	}
-	chain := append(append([]grpc.UnaryServerInterceptor{}, opts.Interceptors...), authInterceptor(keys, db))
+	chain := append(append([]grpc.UnaryServerInterceptor{}, opts.Interceptors...), authInterceptorFrom(src, db))
 	s := grpc.NewServer(append(rpc.ServerOptions(), grpc.ChainUnaryInterceptor(chain...))...)
 	Register(s, db, opts)
 	return s, nil

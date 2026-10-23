@@ -482,7 +482,10 @@ export CORTEXDB_GRPC_TOKEN="<同一个 token>"
 做 TLS 终结的反向代理后面，以 `https://host` 发布。只用单个 token 时，**token 就是
 全部的访问控制**：拿到它就有完整读写权。要更细的控制，给服务端一个 key 文件
 （`CORTEXDB_KEY_FILE` 或 `-keys`）：每个 key 是 `read-only` 或 `read-write`，还可以
-限定在某些 user id、记忆 scope、namespace 和 collection 上。embedder 和 LLM 配置在
+限定在某些 user id、记忆 scope、namespace 和 collection 上。服务端会在 key 文件变化时
+重新读取它，增加或删除的 key 无需重启即可生效；文件写入后的 2 秒内，每次请求都会重读并
+比较内容，所以长度相同的密钥轮换也能被发现。读不出来的改动（文件无法读取、JSON 错误、
+没有任何 key）不会生效：原有的 key 继续有效，并记录一条日志。embedder 和 LLM 配置在
 服务端，不在客户端。`--graph-html` 和 `--export-memory` 同样读共享大脑；
 `--learn-path` 仍作用于本地数据库。
 

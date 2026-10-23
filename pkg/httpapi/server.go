@@ -37,10 +37,12 @@ type Options struct {
 	// KeyFile is the path to a JSON file of scoped API keys. When set it is
 	// the entire policy and Token is ignored — see authz.Resolve for why
 	// honouring both would leave the environment variable as a master key
-	// outranking every scope in the file.
+	// outranking every scope in the file. The server reads it again when it
+	// changes (authz.KeySource); a change that does not load leaves the keys
+	// in force.
 	KeyFile string
 	// Keys is a pre-loaded policy, for callers that build one in process.
-	// It takes precedence over Token and KeyFile.
+	// It takes precedence over Token and KeyFile, and is never reread.
 	Keys *authz.KeySet
 	// DBPath is reported by GET /v1/info. It is a label, not a handle: nothing
 	// here opens it, and leaving it empty only makes /v1/info quieter.
@@ -63,10 +65,10 @@ func New(db *cortexdb.DB, opts Options) http.Handler {
 
 // NewWithPolicy is New, reporting a key-file load failure to the caller.
 func NewWithPolicy(db *cortexdb.DB, opts Options) (http.Handler, error) {
-	keys := opts.Keys
-	if keys == nil {
+	src := authz.StaticKeySource(opts.Keys)
+	if opts.Keys == nil {
 		var err error
-		keys, err = authz.Resolve(opts.KeyFile, opts.Token)
+		src, err = authz.ResolveSource(opts.KeyFile, opts.Token)
 		if err != nil {
 			return nil, err
 		}
@@ -78,7 +80,7 @@ func NewWithPolicy(db *cortexdb.DB, opts Options) (http.Handler, error) {
 	// inside the router, unwrapped: a path nobody registered is not an
 	// authorisation failure and should not be reported as one.
 	rt.wrapEach(authorizeWith(db))
-	return authenticate(keys, rt), nil
+	return authenticateFrom(src, rt), nil
 }
 
 // refuseAll is what a server does when it has no policy it can trust: say why,

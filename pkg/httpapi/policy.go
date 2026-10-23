@@ -41,10 +41,18 @@ func keyFrom(ctx context.Context) (authz.Key, bool) {
 // side; locking an open loopback deployment on upgrade would be the worse
 // surprise.
 func authenticate(keys *authz.KeySet, next http.Handler) http.Handler {
-	if !keys.Enabled() {
-		return next
-	}
+	return authenticateFrom(authz.StaticKeySource(keys), next)
+}
+
+// authenticateFrom is authenticate over the key set src holds at each request,
+// so a key file is applied as it stands now.
+func authenticateFrom(src *authz.KeySource, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		keys := src.Current()
+		if !keys.Enabled() {
+			next.ServeHTTP(w, r)
+			return
+		}
 		secret, found := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		key, ok := authz.Key{}, false
 		if found {

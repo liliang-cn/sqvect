@@ -214,13 +214,18 @@ type Key struct {
 // KeySet is the whole policy a server enforces. A nil or empty KeySet means no
 // authentication at all, which is the historical behaviour of an unset token
 // and is preserved deliberately: silently locking an open loopback deployment
-// on upgrade would be a worse surprise than the open default.
+// on upgrade would be a worse surprise than the open default. The one set
+// without keys that enforces is the closed set a KeySource that was never
+// opened serves: it refuses every key.
 type KeySet struct {
 	keys []Key
+	// closed is a set with no key that still enforces: it refuses every
+	// call. A KeySource that was never opened serves it.
+	closed bool
 }
 
 // Enabled reports whether the set actually enforces anything.
-func (ks *KeySet) Enabled() bool { return ks != nil && len(ks.keys) > 0 }
+func (ks *KeySet) Enabled() bool { return ks != nil && (len(ks.keys) > 0 || ks.closed) }
 
 // Len is the number of keys, for tests and for startup logging.
 func (ks *KeySet) Len() int {
@@ -312,7 +317,8 @@ func Parse(data []byte) (*KeySet, error) {
 	return NewKeySet(f.Keys)
 }
 
-// Load reads a key file from disk.
+// Load reads a key file from disk, once. A server that keeps running reads it
+// through a KeySource, which reads it again when it changes.
 func Load(path string) (*KeySet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
