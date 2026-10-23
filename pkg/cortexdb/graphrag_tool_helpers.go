@@ -197,7 +197,11 @@ func sanitizeFTSQuery(query string) string {
 	return strings.Join(terms, " ")
 }
 
-func lexicalSearchQueries(query string, keywords []string, alternateQueries []string) []string {
+// lexicalSearchQueries are the full-text queries of one search: the question,
+// each alternate query, and the OR queries of their keywords. alternateWords
+// are the words of the alternate queries that join the OR queries (see
+// alternateQueryWords and variantWordsOf).
+func lexicalSearchQueries(query string, keywords, alternateQueries, alternateWords []string) []string {
 	trimmed := strings.TrimSpace(query)
 
 	queries := make([]string, 0, 5)
@@ -231,14 +235,25 @@ func lexicalSearchQueries(query string, keywords []string, alternateQueries []st
 	if len(autoKeywords) > 0 {
 		addQuery(strings.Join(autoKeywords, " OR "))
 	}
-
-	allKeywords := mergeLexicalKeywords(plannedKeywords, autoKeywords)
+	// Each alternate query above is an AND of all its words, which a sentence
+	// rarely meets in one row; its words also join the OR query, as keywords do.
+	allKeywords := mergeLexicalKeywords(plannedKeywords, autoKeywords, alternateWords)
 	if len(allKeywords) > 0 {
 		addQuery(strings.Join(formatFTSKeywords(allKeywords, false), " OR "))
 		addQuery(strings.Join(formatFTSKeywords(allKeywords, true), " OR "))
 	}
 
 	return queries
+}
+
+// alternateQueryWords are the keywords of each alternate query, in order,
+// each word once.
+func alternateQueryWords(alternateQueries []string) []string {
+	groups := make([][]string, 0, len(alternateQueries))
+	for _, alternate := range alternateQueries {
+		groups = append(groups, lexicalQueryKeywords(alternate))
+	}
+	return mergeLexicalKeywords(groups...)
 }
 
 func lexicalQueryKeywords(query string) []string {

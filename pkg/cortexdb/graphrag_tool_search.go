@@ -62,7 +62,8 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 		reviewStatus:   reviewStatusOf(resolution.Plan.Filters),
 	}
 
-	queries := lexicalSearchQueries(resolution.Plan.Query, resolution.Plan.Keywords, resolution.Plan.AlternateQueries)
+	variants := t.db.chunkVariantWords(ctx, searchOpts.Collection, resolution.Plan.AlternateQueries)
+	queries := lexicalSearchQueries(resolution.Plan.Query, resolution.Plan.Keywords, resolution.Plan.AlternateQueries, variants.kept)
 	if len(queries) == 0 {
 		return nil, ErrEmptyText
 	}
