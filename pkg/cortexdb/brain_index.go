@@ -13,7 +13,7 @@ import (
 // memories and chunks can be several thousand tokens, most of them for hits
 // the caller then ignores. The index level returns the same hits in the same
 // order, each cut to its first line, so the caller can pick by id and fetch
-// only those with memory_get (memory_ids) or knowledge_get.
+// only those with memory_get (memory_ids) or knowledge_get (knowledge_ids).
 const (
 	RecallDetailFull  = "full"
 	RecallDetailIndex = "index"
@@ -56,7 +56,7 @@ func indexRecall(resp *KnowledgeMemoryRecallResponse) {
 		fmt.Fprintf(&b, "- %s %s%s\n", m.ID, date, m.Content)
 	}
 	if len(resp.Knowledge) > 0 {
-		b.WriteString("Knowledge (fetch with knowledge_get):\n")
+		b.WriteString("Knowledge (fetch with knowledge_get knowledge_ids):\n")
 	}
 	for i := range resp.Knowledge {
 		k := &resp.Knowledge[i]

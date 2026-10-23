@@ -402,7 +402,7 @@ func TestTheAllowlistTableNamesEveryToolAndEveryIDField(t *testing.T) {
 	// Three rows, read as a reviewer reads them: the stores, the kind of
 	// each id, the gates and a tool reached by id only.
 	for _, row := range []string{
-		"| `knowledge_get` | (by id only) | knowledge | `knowledge_id` (knowledge) |  |  |",
+		"| `knowledge_get` | (by id only) | knowledge | `knowledge_id` (knowledge) |  | `knowledge_id` with `knowledge_ids` |",
 		"| `knowledge_memory_recall` | user_id, scope, namespace, collection | knowledge and memory |  | collection → `disable_memory=true`, user_id → `disable_knowledge=true`, scope → `disable_knowledge=true`, namespace → `disable_knowledge=true` |  |",
 		"| `memory_save` | user_id, scope, namespace | memory | `memory_id` (memory), `supersedes` (memory) |  | `entities`, `relations` |",
 		"| `memory_get` | (by id only) | memory | `memory_id` (memory) |  | `memory_id` with `memory_ids` |",

@@ -56,11 +56,12 @@ func KnowledgeMemoryToolDefinitions() []ToolDefinition {
 		},
 		{
 			Name:        "knowledge_get",
-			Description: "Fetch one durable knowledge item by ID.",
+			Description: "Fetch one durable knowledge item by ID, or several at once with knowledge_ids (in the order given; ids that name no document the caller may read are listed in missing).",
 			InputSchema: toolObjectSchema(
-				[]string{"knowledge_id"},
+				nil,
 				map[string]any{
-					"knowledge_id": toolStringSchema("Stable knowledge/document ID."),
+					"knowledge_id":  toolStringSchema("Stable knowledge/document ID."),
+					"knowledge_ids": toolStringArraySchema("Several knowledge/document IDs, e.g. the ones an aggregate_metadata group_by document_id listed."),
 				},
 			),
 		},

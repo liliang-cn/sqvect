@@ -98,12 +98,21 @@ func (r KnowledgeUpdateRequest) review() reviewFields {
 
 // KnowledgeGetRequest fetches a knowledge item by ID.
 type KnowledgeGetRequest struct {
-	KnowledgeID string `json:"knowledge_id"`
+	// KnowledgeID is omitempty so that the MCP server, which infers the
+	// tool's schema from this struct, does not require it beside the list.
+	KnowledgeID string `json:"knowledge_id,omitempty"`
+	// KnowledgeIDs fetches several at once, in the order given. An id that
+	// names no document, or one the caller's scope does not reach, is listed
+	// in Missing rather than failing the call.
+	KnowledgeIDs []string `json:"knowledge_ids,omitempty"`
 }
 
-// KnowledgeGetResponse returns one knowledge item.
+// KnowledgeGetResponse returns one knowledge item, or with KnowledgeIDs the
+// ones found and the ids missing; Knowledge is then the first one found.
 type KnowledgeGetResponse struct {
-	Knowledge KnowledgeRecord `json:"knowledge"`
+	Knowledge  KnowledgeRecord   `json:"knowledge"`
+	Knowledges []KnowledgeRecord `json:"knowledges,omitempty"`
+	Missing    []string          `json:"missing,omitempty"`
 }
 
 // KnowledgeDeleteRequest deletes a knowledge item by ID.
@@ -262,7 +271,8 @@ func (r MemoryUpdateRequest) review() reviewFields {
 
 // MemoryGetRequest fetches a memory by ID.
 type MemoryGetRequest struct {
-	MemoryID string `json:"memory_id"`
+	// MemoryID is omitempty for the same reason as KnowledgeGetRequest's.
+	MemoryID string `json:"memory_id,omitempty"`
 	// MemoryIDs fetches several at once, in the order given: the second step
 	// after a recall with detail "index". An id that does not exist is listed
 	// in Missing rather than failing the call.

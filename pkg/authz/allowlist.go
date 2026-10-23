@@ -214,8 +214,12 @@ var confinedTools = map[string]toolRule{
 			"session_id": "names a memory bucket by its raw id, which reads another user's session",
 			"persist":    "writes entities to the shared graph and a document under an id the guard cannot see",
 		}},
-	// Knowledge, addressed by id alone: the row guard decides.
-	"knowledge_get":    {stores: storeKnowledge, ids: []idField{{"knowledge_id", idKnowledge}}},
+	// Knowledge, addressed by id alone: the row guard decides. The list form
+	// of knowledge_get is data, as memory_get's is: the facade lists a
+	// document outside the caller's collection under missing
+	// (cortexdb.DB.GetKnowledge), and a call sends one form.
+	"knowledge_get": {stores: storeKnowledge, args: []string{"knowledge_ids"}, ids: []idField{{"knowledge_id", idKnowledge}},
+		oneOf: []string{"knowledge_id", "knowledge_ids"}},
 	"knowledge_delete": {stores: storeKnowledge, ids: []idField{{"knowledge_id", idKnowledge}}},
 
 	// Memory: user_id, scope and namespace at the top level. The bucket a
