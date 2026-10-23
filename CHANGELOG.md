@@ -4,6 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.137.0] - 2026-10-23
+
+### Added
+
+- `ingest_document` hashes its content. An identical re-ingest (same text,
+  chunking, collection, metadata and vectors) answers `unchanged` and writes
+  nothing; a re-ingest of changed text keeps the chunks and the graph the
+  caller attached where they still apply. `dedupe: true` refuses content
+  already stored in the same collection and names the holder (#75).
+- Documents can expire: `expires_at` on `ingest_document`, `knowledge_save`
+  and `knowledge_update` leaves an expired document out of every search,
+  chunk tool, graph walk and aggregate. `sweep_expired`, `DB.SweepExpired` and
+  `cortexdb-mcp-stdio --sweep-expired [--dry-run] [--json]` delete expired
+  documents and memories (#76).
+- Documents and memories carry a review decision (`review_status`,
+  `reviewed_by`, `reviewed_at`); with `CORTEXDB_REVIEW_GATE=1` or
+  `WithReviewGate()` proposed and rejected rows are left out of search and
+  recall. A curation filter, not access control (#77).
+
+### Fixed
+
+- With an embedder, `ingest_document` wrote lexical vectors of another width,
+  which the vector index refused, so its chunks never reached semantic
+  search. It now embeds as `knowledge_save` does (#84).
+- `vector_dimension_repair` wrote each repaired row back without its
+  document, metadata and ACL. It now changes the vector only, and gives back
+  to chunk rows an earlier repair stripped their document and metadata, from
+  the chunk id and the document record; their ACL cannot be recovered (#84).
+
+### Upgrade notes
+
+- The engine keeps its own marks under keys that start with `_`
+  (`_expires_at`, `_review_status`, `_content_sha256`, `_vectors`, …). A
+  database that already used `_expires_at` or `_review_status` as ordinary
+  metadata will see those rows hidden; run `--sweep-expired --dry-run` before
+  the first real sweep.
+- Documents stored before this release carry no `_vectors` mark, so their
+  next `ingest_document` rewrites them once, with the current embedder's
+  vectors, instead of answering `unchanged`.
+
 ## [2.136.0] - 2026-10-22
 
 ### Added
