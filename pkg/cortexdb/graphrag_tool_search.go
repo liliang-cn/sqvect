@@ -67,10 +67,22 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 		return nil, ErrEmptyText
 	}
 
+	// A plain question stops when it fills top_k by itself. A search with
+	// alternate queries or keywords runs every phrasing, each to four times
+	// top_k as SearchTextOnly's expanded path does, and fuses their lists by
+	// rank (see fuseLexicalLists): a list cut at top_k would rank a row by
+	// where the cut fell.
+	phrasings := len(resolution.Plan.AlternateQueries) > 0 || len(resolution.Plan.Keywords) > 0
+	listOpts := searchOpts
+	if phrasings {
+		listOpts.TopK *= 4
+		queries = fusedPhrasings(resolution.Plan.Query, queries)
+	}
+	var lists [][]core.ScoredEmbedding
 	merged := make(map[string]core.ScoredEmbedding)
 	var firstErr error
 	for idx, query := range queries {
-		results, err := t.db.SearchTextOnly(ctx, query, searchOpts)
+		results, err := t.db.SearchTextOnly(ctx, query, listOpts)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -78,6 +90,10 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 			continue
 		}
 		if len(results) == 0 {
+			continue
+		}
+		if phrasings {
+			lists = append(lists, results)
 			continue
 		}
 
@@ -102,10 +118,17 @@ func (t *GraphRAGToolbox) searchTextCandidates(ctx context.Context, req ToolSear
 		if err != nil {
 			log.Printf("cortexdb: cjk bigram search skipped: %v", err)
 		}
+		lists = append(lists, cjk)
 		for _, result := range cjk {
 			if existing, ok := merged[result.ID]; !ok || result.Score > existing.Score {
 				merged[result.ID] = result
 			}
+		}
+	}
+	if phrasings {
+		merged = make(map[string]core.ScoredEmbedding)
+		for _, result := range fuseLexicalLists(0, lists...) {
+			merged[result.ID] = result
 		}
 	}
 
