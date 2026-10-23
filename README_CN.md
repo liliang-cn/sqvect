@@ -86,6 +86,7 @@ haiku 用的是 Claude Code 自己的模型额度，不需要 API key。语言�
 | `CORTEXDB_GRPC_ADDR` | 服务端监听地址（默认 `127.0.0.1:47821`） |
 | `CORTEXDB_EMBED_BASE_URL` | OpenAI 兼容的 embeddings 端点；不设就是词法模式 |
 | `CORTEXDB_EMBED_MODEL` / `CORTEXDB_EMBED_DIM` | embedding 模型和维度 |
+| `CORTEXDB_REVIEW_GATE` | 服务端和 `cortexdb-mcp-stdio`：`1` 时待审和被拒的文档、记忆不进搜索和召回（默认关；这是整理用的过滤，不是权限控制） |
 | `CORTEXDB_SLOW_MS` | 服务端：超过这个毫秒数的请求记日志，带各阶段耗时（默认 `1000`，`0` 不记） |
 | `CORTEXDB_TRACE` / `CORTEXDB_TRACE_FILE` | 服务端：每个请求都记；同时把记录追加到 JSON lines 文件 |
 

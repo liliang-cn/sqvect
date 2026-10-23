@@ -393,7 +393,21 @@ tools := db.GraphRAGTools()                             // 进程内 tool callin
 server := db.NewMCPServer(cortexdb.MCPServerOptions{})  // MCP server
 ```
 
-工具分组（60+ 个工具，进程内与 MCP 同名）：GraphRAG（`ingest_document`、`search_text`、`build_context`、`expand_graph`、`search_paths`、`find_nodes`、`delete_document_graph`）、统一检索（`cortex_query`）、knowledge/memory（`knowledge_save`、`memory_search` …）、KnowledgeMemory（`knowledge_memory_recall`、`_reflect`、`_consolidate`、`extract_conversation`）、KG（`knowledge_graph_query`、`_shacl_validate`、`apply_inference`）、ontology（`ontology_save`、`ontology_action_apply`、`object_set_resolve`）、维护（`vector_dimension_repair`）。MCP server 额外提供 `render_graph_html`——交互式知识图谱视图。`memoryflow`/`graphflow`/`importflow`/`connector` 各自也暴露自己的 toolbox。
+工具分组（60+ 个工具，进程内与 MCP 同名）：GraphRAG（`ingest_document`、`search_text`、`build_context`、`expand_graph`、`search_paths`、`find_nodes`、`delete_document_graph`）、统一检索（`cortex_query`）、knowledge/memory（`knowledge_save`、`memory_search` …）、KnowledgeMemory（`knowledge_memory_recall`、`_reflect`、`_consolidate`、`extract_conversation`）、KG（`knowledge_graph_query`、`_shacl_validate`、`apply_inference`）、ontology（`ontology_save`、`ontology_action_apply`、`object_set_resolve`）、维护（`vector_dimension_repair`、`sweep_expired`）。MCP server 额外提供 `render_graph_html`——交互式知识图谱视图。`memoryflow`/`graphflow`/`importflow`/`connector` 各自也暴露自己的 toolbox。
+
+### 过期与清理
+
+`ingest_document`、`knowledge_save`、`knowledge_update` 接受 `expires_at`（RFC 3339 时间）。过了这个时间，文档不再出现在任何搜索、分块工具、图遍历和统计里，但仍可按 id 读到（`knowledge_get`）。不传这个字段会保留原来的过期时间，所以从源头重新同步不会解除保留期限；传空值则去掉过期时间。引擎把它存在自己的 metadata 键 `_expires_at` 下；名为 `expires_at` 的 metadata 键属于调用方，引擎从不读取。
+
+记忆仍然靠 `ttl_seconds` 过期。过期的行以前没人删：现在 `sweep_expired`（工具）、`DB.SweepExpired`（库）和 `cortexdb-mcp-stdio --sweep-expired [--dry-run] [--json]` 会删掉所有过期文档（记录、分块、图节点）和过期记忆，每一条在删除前再检查一次，列出之后又续期的会保留。设置了 `CORTEXDB_REMOTE` 时，命令通过工具清理共享大脑。`sweep_expired` 是写工具，任何读写 key 都能执行。
+
+升级前用过 `_expires_at` 或 `_review_status` 这两个 metadata 键的库，第一次真正清理前先跑一次 `--dry-run`，确认要删的是哪些。
+
+### 审核状态与审核门禁
+
+`ingest_document`、`knowledge_save`、`knowledge_update`、`memory_save`、`memory_update`（以及使用 `memory_save` 请求的 `knowledge_memory_remember`）接受 `review_status`（`proposed`、`accepted`、`rejected`），批准或拒绝时可带 `reviewed_by` 和 `reviewed_at`。服务端启用 key 时，审核人就是调用方的 key，`reviewed_by` 写成别人会被拒绝；提议（proposed）不带这两个字段。没有给出审核决定的写入保留原来的决定。引擎把它存在自己的键 `_review_status`、`_reviewed_by`、`_reviewed_at` 下，只放在记录上；名为 `review_status` 的 metadata 键属于调用方，引擎从不读取。
+
+服务端（或 `cortexdb-mcp-stdio`）设置 `CORTEXDB_REVIEW_GATE=1` 时，待审和被拒的文档、记忆不进任何搜索和召回、分块工具、统计，也不出现在从某个节点出发的图遍历里（`knowledge_memory_neighbors`、`knowledge_memory_expand_entity_context`、`expand_graph`、`get_nodes`、`search_paths`、`knowledge_memory_shortest_path`）。按原样读图的工具（`find_nodes`、`disambiguate_mentions`、`predict_graph_edges`、`rank_graph_nodes`、`graph_list_all`、`graph_cypher_query`）仍会返回，就像过期行在清理前仍会返回一样。不开门禁时只记录决定、不隐藏任何东西。门禁是整理用的过滤，不是权限控制：`knowledge_get` 和 `memory_get` 仍能按 id 读到被隐藏的行，任何写入方都能直接存为 `accepted`，`plan.filters.review_status` 也能让任何读取方列出某种状态的文档（记忆忽略这个过滤）。整理者用按 `_review_status` 过滤的 `aggregate_metadata` 列出待审内容。在计划和统计里按 `accepted` 过滤时，也包括没有状态的文档。开门禁时，待审或被拒的记忆不会被提升为知识，对话摘要也不会包含它。引擎自己做的其他写入（整合、对话提取、导入）不带状态。
 
 ## Claude Code 和 Codex 插件
 
