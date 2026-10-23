@@ -21,3 +21,11 @@ import (
 func AuthInterceptor(keys *authz.KeySet, db *cortexdb.DB) grpc.UnaryServerInterceptor {
 	return authInterceptor(keys, db)
 }
+
+// AuthInterceptorFromSource is AuthInterceptor over the keys src holds at each
+// call: with authz.OpenKeySource, a key added to or removed from the key file
+// applies without a restart, as in the servers NewWithPolicy builds. A nil
+// or zero src refuses every call.
+func AuthInterceptorFromSource(src *authz.KeySource, db *cortexdb.DB) grpc.UnaryServerInterceptor {
+	return authInterceptorFrom(src, db)
+}

@@ -1119,7 +1119,10 @@ Tailscale, or publish it as `https://host` behind a TLS-terminating proxy
 token, **the token is the access control**: anyone holding it has full
 read/write access. For finer control, give the server a key file
 (`CORTEXDB_KEY_FILE` or `-keys`): each key is `read-only` or `read-write` and
-can be confined to user ids, memory scopes, namespaces and collections. Embedder and LLM settings live on the server, not the
+can be confined to user ids, memory scopes, namespaces and collections. The
+server reads the file again when it changes, so a key added or removed applies
+without a restart; a change that does not load leaves the keys in force and is
+logged. Embedder and LLM settings live on the server, not the
 clients. `--graph-html`, `--recall-eval` and `--capture-session` follow the
 remote too. Some one-shot modes are local-only by design — `--learn-path`,
 `--reembed-memories` and `--graph-cleanup` among them; the latter two need

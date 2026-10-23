@@ -27,7 +27,14 @@ const nestedScanDepth = 4
 // names. A nil or empty key set disables authentication, which is what an unset
 // token has always meant.
 func authInterceptor(keys *authz.KeySet, db *cortexdb.DB) grpc.UnaryServerInterceptor {
+	return authInterceptorFrom(authz.StaticKeySource(keys), db)
+}
+
+// authInterceptorFrom is authInterceptor over the key set src holds at each
+// call, so a key file is applied as it stands now.
+func authInterceptorFrom(src *authz.KeySource, db *cortexdb.DB) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		keys := src.Current()
 		if !keys.Enabled() {
 			return handler(ctx, req)
 		}
