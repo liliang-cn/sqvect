@@ -133,7 +133,7 @@ func (db *DB) ReembedMismatchedVectors(ctx context.Context, opts ReembedOptions)
 	return report, nil
 }
 
-// restoreStrippedChunks gives back to chunk rows what a repair before v2.137.0
+// restoreStrippedChunks gives back to chunk rows what a repair before v2.138.0
 // took from them. That repair wrote each row back with its id, content and
 // collection alone, so the chunk lost the document it belongs to and its
 // metadata: search could no longer report where a hit came from, and the

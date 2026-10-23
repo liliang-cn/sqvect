@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.138.0] - 2026-10-23
+
+### Changed
+
+- Keyword hits are scored by the rarity of the words they match: relevance
+  is the IDF-weighted share of the question's words a row covers, so a row
+  that shares only a common word ("是什么", "CortexDB") with the question no
+  longer scores high, and a hit must match more than one word of the
+  question. Fusion ranks a hit found by both retrievers first and breaks ties
+  in favour of the semantic one.
+- Knowledge search has a relevance floor: a chunk must reach a cosine of
+  0.40 or a keyword coverage of 0.25, and keyword memory hits a coverage of
+  0.25; below it fewer or no hits come back instead of noise.
+  `CORTEXDB_KNOWLEDGE_VECTOR_FLOOR`, `CORTEXDB_KNOWLEDGE_KEYWORD_FLOOR` and
+  `CORTEXDB_MEMORY_KEYWORD_FLOOR` tune them. On a snapshot of a live brain:
+  memory hit@5 0.604 → 0.750 (lexical) and 0.750 → 0.833 (hybrid), no
+  labelled answer lost; hits returned for off-topic questions 43 → 1
+  (knowledge, hybrid). In lexical mode a memory that shares one word with a
+  longer question is no longer returned.
+
 ### Fixed
 
 - The HNSW index loaded from its snapshot could stay far behind the table
