@@ -108,11 +108,10 @@ type toolRule struct {
 	// most: the tool reads one and ignores the other, and the guard must
 	// read the one the tool reads.
 	oneOf []string
-	// rewritten lists, for a tool whose facade writes the engine's own keys
-	// over the caller's (cortexdb.EngineDocumentKeys on a document,
-	// cortexdb.EngineMemoryKeys on a memory), those keys: a row read back and
-	// sent again carries them, and they are not refused under their exact
-	// spelling.
+	// rewritten lists, for a tool whose facade writes its own keys over the
+	// caller's (documentKeys on a document, cortexdb.EngineMemoryKeys on a
+	// memory), those keys: a row read back and sent again carries them, and
+	// they are not refused under their exact spelling.
 	rewritten func() []string
 }
 
@@ -159,9 +158,9 @@ var (
 	// (cortexdb.attachGraphRAGPaths calls SearchPaths), the walk
 	// search_paths does.
 	// writerKeys record who wrote a row (cortexdb.WithWriter). The facade
-	// stamps them on SaveKnowledge, UpdateKnowledge, SaveMemory and
-	// UpdateMemory, but not on ingest_document, so a confined key naming one
-	// in metadata could sign a row as another key.
+	// replaces them under their exact spelling only, so a confined key naming
+	// one in another spelling could sign a row as another key. The document
+	// tools take the exact spelling back (documentKeys).
 	writerKeys = map[string]string{
 		"written_by": "records who wrote the row, which the engine sets from the key",
 		"updated_by": "records who updated the row, which the engine sets from the key",
@@ -179,6 +178,13 @@ var (
 	bothScopes      = []string{FieldUserID, FieldScope, FieldNamespace, FieldCollection}
 )
 
+// documentKeys are the metadata keys the facade rewrites on every write of a
+// document: the engine's marks, expiry and review decision, and the
+// signature of the key that writes.
+func documentKeys() []string {
+	return append(cortexdb.EngineDocumentKeys(), cortexdb.WriterKeys()...)
+}
+
 func paths(lists ...[]string) []string {
 	var out []string
 	for _, l := range lists {
@@ -190,11 +196,11 @@ func paths(lists ...[]string) []string {
 // confinedTools is the allowlist.
 var confinedTools = map[string]toolRule{
 	// Knowledge: one collection, named at the top level.
-	"ingest_document": {scope: collectionScope, stores: storeKnowledge, rewritten: cortexdb.EngineDocumentKeys,
+	"ingest_document": {scope: collectionScope, stores: storeKnowledge, rewritten: documentKeys,
 		args: paths(docArgs, []string{"dedupe"}), ids: []idField{{"document_id", idKnowledge}}},
-	"knowledge_save": {scope: collectionScope, stores: storeKnowledge, rewritten: cortexdb.EngineDocumentKeys,
+	"knowledge_save": {scope: collectionScope, stores: storeKnowledge, rewritten: documentKeys,
 		args: docArgs, ids: []idField{{"knowledge_id", idKnowledge}}, denied: graphDenied},
-	"knowledge_update": {scope: collectionScope, stores: storeKnowledge, rewritten: cortexdb.EngineDocumentKeys,
+	"knowledge_update": {scope: collectionScope, stores: storeKnowledge, rewritten: documentKeys,
 		args: docArgs, ids: []idField{{"knowledge_id", idKnowledge}}, denied: graphDenied},
 	"knowledge_search": {scope: collectionScope, stores: storeKnowledge,
 		args: paths(queryArgs, walkArgs, planArgs, pprArgs, []string{"top_k", "diversity_lambda"})},

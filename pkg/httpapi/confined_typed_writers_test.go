@@ -12,9 +12,9 @@ import (
 // The facade signs the two typed writes: written_by is replaced by the key
 // that writes, and updated_by goes. So a confined key that sends them back,
 // as a row read back carries them, is not refused for that, and the row
-// keeps the facade's signature, not the one sent. The tool route keeps the
-// allowlist's refusal, and so does another spelling, which the facade does
-// not replace.
+// keeps the facade's signature, not the one sent. Another spelling, which
+// the facade does not replace, keeps the allowlist's refusal, and so does a
+// memory written through the tool route.
 func TestATypedWriteTakesTheSignatureTheFacadeReplaces(t *testing.T) {
 	ks, err := authz.NewKeySet([]authz.Key{
 		{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite},
@@ -54,13 +54,18 @@ func TestATypedWriteTakesTheSignatureTheFacadeReplaces(t *testing.T) {
 		}
 	}
 	for _, c := range []struct{ path, body string }{
-		{"/v1/tools/knowledge_save", `{"knowledge_id":"k2","collection":"notes","content":"x","metadata":{"written_by":"zeus"}}`},
+		{"/v1/tools/knowledge_save", `{"knowledge_id":"k2","collection":"notes","content":"x","metadata":{"Written_By":"zeus"}}`},
 		{"/v1/knowledge", `{"knowledge_id":"k3","collection":"notes","content":"x","metadata":{"Written_By":"zeus"}}`},
 	} {
 		status, payload := do(t, srv, http.MethodPost, c.path, "notes-secret", c.body)
 		if status != http.StatusForbidden || !strings.Contains(errorMessage(t, payload), "metadata.written_by") {
 			t.Errorf("%s %s: %d %s, want 403 naming metadata.written_by", c.path, c.body, status, payload)
 		}
+	}
+	status, payload := do(t, srv, http.MethodPost, "/v1/tools/memory_save", "hermes-secret",
+		`{"memory_id":"h2","user_id":"hermes","scope":"user","content":"x","metadata":{"written_by":"zeus"}}`)
+	if status != http.StatusForbidden || !strings.Contains(errorMessage(t, payload), "metadata.written_by") {
+		t.Errorf("memory_save with a signature: %d %s, want 403 naming metadata.written_by", status, payload)
 	}
 }
 

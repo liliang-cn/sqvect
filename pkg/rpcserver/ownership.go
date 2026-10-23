@@ -136,11 +136,12 @@ func authorizeToolArgs(key authz.Key, req any) error {
 // SaveKnowledge, UpdateKnowledge, SaveMemory and UpdateMemory are signed by
 // the facade (cortexdb.WithWriter replaces written_by and updated_by), so
 // those two keys are not handed over: a row read back and sent again is not
-// refused for the signature it carries. InsertGraphDocument is not signed and
-// keeps the refusal. And a memory write from a key that reaches no memory row
-// (one confined to a collection) is left to the row checks, which answer it
-// as main does: the interceptor refuses SaveMemory, and UpdateMemory is
-// NOT_FOUND like GetMemory and DeleteMemory.
+// refused for the signature it carries. InsertGraphDocument is signed too,
+// and its line, ingest_document's, takes the two keys back. And a memory
+// write from a key that reaches no memory row (one confined to a
+// collection) is left to the row checks, which answer it as main does: the
+// interceptor refuses SaveMemory, and UpdateMemory is NOT_FOUND like
+// GetMemory and DeleteMemory.
 func authorizeTypedArgs(key authz.Key, req any) error {
 	if key.Scope.IsZero() {
 		return nil
@@ -186,8 +187,9 @@ func authorizeTypedArgs(key authz.Key, req any) error {
 			signed(m)
 		}
 	case *rpcv1.InsertGraphDocumentRequest:
-		// InsertGraphDocument drops a caller's copy of the marks, as the
-		// ingest_document line of the allowlist expects.
+		// InsertGraphDocument drops a caller's copy of the marks and signs
+		// the document, as the ingest_document line of the allowlist
+		// expects.
 		tool, args["collection"] = "ingest_document", r.GetCollection()
 		stringMap(r.GetMetadata())
 	case *rpcv1.SaveMemoryRequest:

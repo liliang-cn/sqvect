@@ -173,6 +173,8 @@ func (db *DB) InsertGraphDocument(ctx context.Context, doc GraphRAGDocument, opt
 	if strings.TrimSpace(doc.Content) == "" {
 		return nil, ErrEmptyText
 	}
+	// Signed as ingest_document signs.
+	doc.Metadata = signedCopy(ctx, doc.Metadata)
 
 	applyGraphRAGIngestDefaults(&opts)
 	if err := db.graph.InitGraphSchema(ctx); err != nil {

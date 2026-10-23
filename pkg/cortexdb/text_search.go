@@ -71,7 +71,7 @@ func (db *DB) InsertText(ctx context.Context, id string, text string, metadata m
 		ID:       id,
 		Vector:   vec,
 		Content:  text,
-		Metadata: metadata,
+		Metadata: signedCopy(ctx, metadata),
 	}
 	return db.store.Upsert(ctx, embedding)
 }
@@ -100,6 +100,7 @@ func (db *DB) InsertTextBatch(ctx context.Context, texts map[string]string, meta
 		return fmt.Errorf("%w: %w", ErrEmbeddingFailed, err)
 	}
 
+	metadata = signedCopy(ctx, metadata)
 	embeddings := make([]*core.Embedding, len(ids))
 	for i, id := range ids {
 		embeddings[i] = &core.Embedding{

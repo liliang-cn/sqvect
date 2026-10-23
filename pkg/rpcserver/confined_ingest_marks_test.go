@@ -21,7 +21,8 @@ import (
 // back the metadata of a document it read, marks included, is not refused,
 // and the document keeps the engine's marks, not the ones sent. The tool
 // route does the same for ingest_document, knowledge_save and
-// knowledge_update, and InsertGraphDocument drops the marks it is sent. A
+// knowledge_update, signature included, and InsertGraphDocument drops the
+// marks it is sent. A
 // memory write keeps the refusal: it does not write the marks.
 func TestATypedKnowledgeWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 	ks, err := authz.NewKeySet([]authz.Key{
@@ -79,17 +80,27 @@ func TestATypedKnowledgeWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 		t.Fatalf("UpdateKnowledge with the metadata it read: %v", err)
 	}
 	same("UpdateKnowledge")
-	// The tool route refuses a signature, as on main, so the signed
-	// record is sent back without it.
-	delete(sent, "written_by")
-	delete(sent, "updated_by")
+	// The tool route takes the signature back too: the facade signs the
+	// three document tools, so the signed record is sent back as read, and
+	// the forged signature is not kept.
+	sent["written_by"], sent["updated_by"] = "forged", "forged"
 	tools := rpcv1.NewToolsServiceClient(conn)
-	for _, c := range []struct{ tool, id string }{{"ingest_document", "document_id"}, {"knowledge_save", "knowledge_id"}, {"knowledge_update", "knowledge_id"}} {
+	for _, c := range []struct{ tool, id, updatedBy string }{{"ingest_document", "document_id", ""}, {"knowledge_save", "knowledge_id", ""}, {"knowledge_update", "knowledge_id", "notes"}} {
 		args, _ := json.Marshal(map[string]any{c.id: "n1", "collection": "notes", "content": "Orpheus plays.", "metadata": sent})
 		if _, err := tools.CallTool(asKey("notes-secret"), &rpcv1.CallToolRequest{Name: c.tool, ArgsJson: string(args)}); err != nil {
 			t.Fatalf("CallTool %s with the metadata it read: %v", c.tool, err)
 		}
 		same(c.tool)
+		if after := read(); after["written_by"] != "notes" || after["updated_by"] != c.updatedBy {
+			t.Errorf("after %s, the document is signed %q / %q, want notes / %q", c.tool, after["written_by"], after["updated_by"], c.updatedBy)
+		}
+	}
+	for _, c := range []struct{ tool, id string }{{"ingest_document", "document_id"}, {"knowledge_save", "knowledge_id"}, {"knowledge_update", "knowledge_id"}} {
+		_, err := tools.CallTool(asKey("notes-secret"), &rpcv1.CallToolRequest{Name: c.tool,
+			ArgsJson: `{"` + c.id + `":"n1","collection":"notes","content":"x","metadata":{"Written_By":"forged"}}`})
+		if status.Code(err) != codes.PermissionDenied || !strings.Contains(status.Convert(err).Message(), "metadata.written_by") {
+			t.Errorf("CallTool %s with another spelling of the signature: %v, want PERMISSION_DENIED naming metadata.written_by", c.tool, err)
+		}
 	}
 
 	// InsertGraphDocument drops a caller's copy of the marks, so the
@@ -117,5 +128,28 @@ func TestATypedKnowledgeWriteTakesTheMarksTheFacadeReplaces(t *testing.T) {
 	_, err = knowledge.SaveKnowledge(asKey("notes-secret"), &rpcv1.SaveKnowledgeRequest{KnowledgeId: "n2", Collection: "notes", Content: "x", Metadata: map[string]string{"_Content_SHA256": "forged"}})
 	if status.Code(err) != codes.PermissionDenied {
 		t.Errorf("SaveKnowledge with another spelling of a mark: %v, want PERMISSION_DENIED", err)
+	}
+}
+
+// A key with no collection scope may name written_by on ingest_document: the
+// facade replaces it with the key, so the document cannot be signed as
+// anyone else.
+func TestAnIngestByAnUnconfinedKeyIsSignedByTheKeyOverGRPC(t *testing.T) {
+	ks, err := authz.NewKeySet([]authz.Key{{ID: "operator", Secret: "op-secret", Clearance: authz.ReadWrite}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := newPolicyConn(t, Options{Keys: ks})
+	tools := rpcv1.NewToolsServiceClient(conn)
+	if _, err := tools.CallTool(asKey("op-secret"), &rpcv1.CallToolRequest{Name: "ingest_document",
+		ArgsJson: `{"document_id":"d1","content":"Orpheus plays.","metadata":{"written_by":"zeus","updated_by":"zeus"}}`}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := rpcv1.NewKnowledgeServiceClient(conn).GetKnowledge(asKey("op-secret"), &rpcv1.GetKnowledgeRequest{KnowledgeId: "d1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := got.GetKnowledge().GetMetadata(); m["written_by"] != "operator" || m["updated_by"] != "" {
+		t.Errorf("the document is signed %q / %q, want operator and no updated_by", m["written_by"], m["updated_by"])
 	}
 }
