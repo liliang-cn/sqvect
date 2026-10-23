@@ -63,6 +63,8 @@ var readToolsAndTheExpiry = map[string]string{
 	"uncited_facts":         "entities and relations",
 	"verify_claims":         "entities and relations",
 
+	"check_against_sources": "named sources: an expired or proposed one is missing (TestAnExpiredOrProposedSourceIsMissing)",
+
 	"memory_get":      "memories: their own expires_at, as on main",
 	"memory_list_all": "memories: their own expires_at, as on main",
 	"memory_search":   "memories: their own expires_at, as on main",

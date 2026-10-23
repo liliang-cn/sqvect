@@ -396,6 +396,32 @@ func (t *GraphRAGToolbox) Definitions() []ToolDefinition {
 			),
 		},
 		{
+			Name:        "check_against_sources",
+			Description: "Check sentences against the text of the sources they cite, before a synthesis is kept. For each sentence, in its order, missing lists the facts no cited source contains: its pieces that hold a digit, and its marked words (a capital after the first letter, or an initial capital and four letters or more; the first word does not count when only its initial is a capital). A piece is the run between white spaces, stripped at its end of the sentence punctuation (. , ; : ! ? \u2026 and their CJK, Arabic and Devanagari forms) and of closing brackets and quotes, and at its start of opening brackets and quotes, \u00bf \u00a1 and the CJK marks \u3001 \u3002 \uff1a; any other sign stays in it. A piece that holds a digit is one fact, found only as a whole piece of a source: 12/03/2025, 12:30, GPT-4, -5, 10\u2076, 1'234.56, 5% and x86 are each one fact, so 3 is not found in 3.5, 4 not in GPT-4, 5 not in -5 nor in 5%, 10 not in 10\u00b3. A space before a group of exactly three digits joins it to the digit before (1 234,56), and a single Han, kana or hangul rune between two digits does not cut (2025\u5e743\u670812\u65e5). A value written with words or spaces between its parts (12 March 2025, 15 h 30, a Korean date with spaces) is checked part by part, and a date written with fewer parts is another fact (3\u670812 is not 2025\u5e743\u670812). Sentence marks outside the list (\u0589, \u037e, \u104b, \u17d4, \uff02) stay in the piece, so the fact is missed. Case, accents and format characters are ignored, every dash and the minus sign are one, ' \u2019 and \u2018 are one, and a decimal comma is a point (so 1,234 and 1.234 are one, but 1,234 is not 1234). A word with no digit is found inside a longer one. Runs of Han, kana and hangul, with the kana marks \u30fc \u30fb \uff70 \uff65 \u309b \u309c \u3006 \u301c \u30a0 \u3031 \u3032, are not checked; the numbers and Latin names among them are. The full-width tilde \uff5e is ~ once folded and stays in a piece, so a number glued to it is missed. sources_missing names, once each, the sources that could not be read: unknown, expired, hidden pending review, outside the collection, or outside the caller's scope. holds is true when the sentence cites a source, every source was read and nothing is missing. Deterministic, no model; it says what the sources do not say, not whether the sentence is true. The engine holds no word list: pass equivalents for names written another way.",
+			InputSchema: toolObjectSchema(
+				[]string{"sentences"},
+				map[string]any{
+					"collection": toolStringSchema("Optional collection every source must be in; a source of another collection is missing."),
+					"sentences": map[string]any{
+						"type":        "array",
+						"description": "At most 500 sentences, one claim each, citing at most 200 distinct sources and 4 MB of source text in all, 8 MB once folded (Latin, Han and Arabic text keeps its size, Hangul grows 2 to 3 times), with at most 1,048,576 lookups of a fact or an equivalent in one cited source per call and 67,108,864 bytes of folded forms looked up (a source cited twice by a sentence counts once); a fact longer than 256 bytes once folded is missing, with no lookup; the results follow their order.",
+						"items": toolObjectSchema(
+							[]string{"text"},
+							map[string]any{
+								"text":    toolStringSchema("The sentence."),
+								"sources": toolStringArraySchema("At most 50 document ids or chunk ids (chunk:<document>:<index>) the sentence cites. A sentence with no source does not hold."),
+							},
+						),
+					},
+					"equivalents": map[string]any{
+						"type":                 "object",
+						"description":          "Optional: for a fact, the other ways a source may write it, e.g. {\"rgpd\": [\"gdpr\", \"dsgvo\"]}. At most 1,000 keys, 20 values per fact once its spellings are folded, 256 bytes per key or value once trimmed and folded (\ufdfa is 33), and 65,536 bytes of keys and values in all. Keys and values are folded and trimmed like the rest; one that holds a digit is found only whole and must be one piece (2016/679, not Regulation 2016/679).",
+						"additionalProperties": toolStringArraySchema("Equivalents of the fact."),
+					},
+				},
+			),
+		},
+		{
 			Name:        "graph_health",
 			Description: "Health checks for a shared graph, each saying whether it fired: growth per producer (a day at spike_factor times a producer's usual volume), the high out- and in-degree tail (hubs far above the median degree, usually extraction artefacts every traversal walks through), supersessions per day (facts closed, versions replaced, edges retracted — bulk churn means writers overwriting each other), temporal invariants (a single-valued relation holding more than one value over the same time, or an interval ending before it begins), and the embedder (failing calls, and memories saved while it was down that still have no vector and so are invisible to semantic recall). Read-only and deterministic. healthy is false when any check fired; alerts names which. Use graph_statistics for plain size and connectivity.",
 			InputSchema: toolObjectSchema(
@@ -863,6 +889,12 @@ func (t *GraphRAGToolbox) Call(ctx context.Context, name string, input json.RawM
 			return nil, fmt.Errorf("decode %s: %w", name, err)
 		}
 		return t.db.VerifyClaimsTool(ctx, req)
+	case "check_against_sources":
+		var req CheckAgainstSourcesRequest
+		if err := json.Unmarshal(input, &req); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", name, err)
+		}
+		return t.db.CheckAgainstSources(ctx, req)
 	case "graph_health":
 		var req ToolGraphHealthRequest
 		if err := json.Unmarshal(input, &req); err != nil {

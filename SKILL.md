@@ -1069,7 +1069,7 @@ Important tools:
 - Execution graph: `execution_run_start`, `execution_step_begin`, `execution_step_end`, `execution_step_record`, `execution_run_finish`, `execution_run_get`, `execution_runs_list`, `execution_step_lineage`, `execution_run_replay`
 - Aggregates and thresholds: `aggregate_metadata`, `representative_records`, `search_vector_range`
 - Graph introspection: `graph_schema`, `graph_property_values`, `graph_statistics`, `graph_health`
-- Claim checking: `verify_claims`, `fact_provenance`, `uncited_facts`
+- Claim checking: `verify_claims`, `fact_provenance`, `uncited_facts`, `check_against_sources`
 - Graph analytics: `rank_graph_nodes`, `predict_graph_edges`
 - Disambiguation: `disambiguate_mentions`
 - Path retrieval: `search_paths` (and `return_paths` on `search_graphrag_lexical`, `relation_policies` on `expand_graph`)
