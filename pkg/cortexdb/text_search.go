@@ -294,6 +294,7 @@ func (db *DB) SearchTextOnly(ctx context.Context, query string, opts TextSearchO
 	if opts.TopK <= 0 {
 		opts.TopK = defaultSearchTopK
 	}
+	ctx = withVariantMemo(ctx)
 
 	// Retrieval-layer authorization: over-fetch, apply the gate, then return up
 	// to TopK authorized rows. Keeping this here (rather than in the caller)
@@ -429,7 +430,7 @@ func (db *DB) recallAuthorized(
 }
 
 func (db *DB) searchTextOnlyExpanded(ctx context.Context, query string, opts TextSearchOptions) ([]core.ScoredEmbedding, error) {
-	queries := lexicalSearchQueries(query, opts.Keywords, opts.AlternateQueries)
+	queries := lexicalSearchQueries(query, opts.Keywords, opts.AlternateQueries, db.chunkVariantWords(ctx, opts.Collection, opts.AlternateQueries).kept)
 	if len(queries) == 0 {
 		return nil, ErrEmptyText
 	}

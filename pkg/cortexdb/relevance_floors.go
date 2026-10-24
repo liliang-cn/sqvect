@@ -105,8 +105,12 @@ func (db *DB) applyKnowledgeFloors(ctx context.Context, result *GraphRAGQueryRes
 		}
 		if scorer == nil {
 			synonyms := append(append(append([]string{}, plan.Keywords...), plan.AlternateQueries...), plan.EntityNames...)
+			q := newRarityQuery(plan.Query, synonyms)
+			if len(plan.AlternateQueries) > 0 {
+				q.common = db.chunkVariantWords(ctx, collection, plan.AlternateQueries).commonBeside(append(append([]string{}, plan.Keywords...), plan.EntityNames...))
+			}
 			var err error
-			if scorer, err = db.chunkRarityScorer(ctx, collection, newRarityQuery(plan.Query, synonyms)); err != nil {
+			if scorer, err = db.chunkRarityScorer(ctx, collection, q); err != nil {
 				return false, err
 			}
 		}

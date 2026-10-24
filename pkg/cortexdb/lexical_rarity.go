@@ -68,6 +68,10 @@ type rarityQuery struct {
 	// extras are keyword and alternate-query terms the question itself does
 	// not contain: lowercased words and CJK bigrams.
 	extras []string
+	// common are the words of the alternate queries that are common in their
+	// match sets (see variantWords). As extras they add their weight, but they
+	// are not separate words of a row.
+	common map[string]bool
 }
 
 // newRarityQuery breaks a question, and the synonyms supplied with it, into
@@ -306,7 +310,9 @@ func (s *rarityScorer) coverage(content string) rarityMatch {
 		}
 		if hit {
 			got += s.extraW[i]
-			m.words++
+			if !s.q.common[e] {
+				m.words++
+			}
 		}
 	}
 	m.share = min(1, got/s.total)

@@ -729,7 +729,8 @@ const (
 // scores next to nothing, and one covering less than the keyword floor is not
 // returned.
 func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, keywords, alternateQueries []string, topK int) ([]MemorySearchHit, error) {
-	queries := lexicalSearchQueries(query, keywords, alternateQueries)
+	variants := db.memoryVariantWords(ctx, bucketID, alternateQueries)
+	queries := lexicalSearchQueries(query, keywords, alternateQueries, variants.kept)
 	if len(queries) == 0 {
 		return nil, ErrEmptyText
 	}
@@ -814,6 +815,7 @@ func (db *DB) searchMemoryLexical(ctx context.Context, bucketID, query string, k
 	// One scan of the bucket measures it for the rarity score and for the
 	// bigram path's BM25; the bigram path counts its own bigrams.
 	rq := newRarityQuery(query, append(append([]string{}, keywords...), alternateQueries...))
+	rq.common = variants.commonBeside(keywords)
 	var stats memoryBucketStats
 	if cjkQuery || !rq.empty() {
 		var err error
