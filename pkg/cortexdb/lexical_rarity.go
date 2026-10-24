@@ -43,6 +43,10 @@ import (
 // Keywords and alternate queries a caller supplies are synonyms, not more
 // question: a row that contains one is credited at half its weight, without
 // enlarging what the question asks for.
+//
+// Words are compared without their accents, as the word index reads them
+// (see foldAccents): the index finds "Universität" for "universitat", and the
+// score must not then drop the row for holding none of the question.
 
 // rarityExtraWeight is the credit a supplied keyword earns, as a share of
 // what the same term would earn as a word of the question.
@@ -71,22 +75,32 @@ type rarityQuery struct {
 }
 
 // newRarityQuery breaks a question, and the synonyms supplied with it, into
-// coverage units.
+// coverage units. A word typed twice with other accents ("universität
+// universitat") is one unit, the first spelling kept: the index reads both
+// the same, and counted twice it would pass the "more than one word" rule
+// alone.
 func newRarityQuery(query string, synonyms []string) rarityQuery {
-	q := rarityQuery{words: rarityWords(query, rarityMaxWords), cjk: cjkQueryTerms(query)}
-	have := make(map[string]struct{}, len(q.words)+len(q.cjk.terms))
-	for _, w := range q.words {
-		have[w] = struct{}{}
+	q := rarityQuery{cjk: cjkQueryTerms(query)}
+	words := rarityWords(query, rarityMaxWords)
+	have := make(map[string]struct{}, len(words)+len(q.cjk.terms))
+	for _, w := range words {
+		key := foldAccents(w)
+		if _, ok := have[key]; ok {
+			continue
+		}
+		have[key] = struct{}{}
+		q.words = append(q.words, w)
 	}
 	for _, t := range q.cjk.terms {
 		have[t] = struct{}{}
 	}
 	joined := strings.Join(synonyms, " ")
 	add := func(term string) {
-		if _, ok := have[term]; ok || len(q.extras) >= rarityMaxWords {
+		key := foldAccents(term)
+		if _, ok := have[key]; ok || len(q.extras) >= rarityMaxWords {
 			return
 		}
-		have[term] = struct{}{}
+		have[key] = struct{}{}
 		q.extras = append(q.extras, term)
 	}
 	for _, w := range rarityWords(joined, rarityMaxWords) {
@@ -121,6 +135,9 @@ func (q rarityQuery) empty() bool {
 }
 
 // patterns are the distinct strings whose document frequency the score needs.
+// They keep the accents they were typed with: the count is a LIKE, which
+// compares them, so a word typed without its accents is counted only in rows
+// that spell it so, and weighs as a rare word.
 func (q rarityQuery) patterns() []string {
 	out := make([]string, 0, len(q.words)+len(q.cjk.terms)+len(q.extras))
 	out = append(out, q.words...)
@@ -141,6 +158,7 @@ func (q rarityQuery) patternsBesideBigrams() []string {
 // rarityScorer is a rarityQuery weighed against one searched set.
 type rarityScorer struct {
 	q      rarityQuery
+	folded []string  // q.words then q.extras, without their accents
 	wordW  []float64 // weight of q.words[i]
 	charW  []float64 // weight of each CJK content character of the question
 	extraW []float64 // weight of q.extras[i]
@@ -184,6 +202,9 @@ func rarityIDF(df, n int) float64 {
 // does not hold from being "covered" by the one word it shares.
 func newRarityScorer(q rarityQuery, df map[string]int, n int) *rarityScorer {
 	s := &rarityScorer{q: q}
+	for _, w := range append(append([]string{}, q.words...), q.extras...) {
+		s.folded = append(s.folded, foldAccents(w))
+	}
 	for _, w := range q.words {
 		weight := rarityIDF(df[w], n)
 		s.wordW = append(s.wordW, weight)
@@ -263,10 +284,11 @@ func (s *rarityScorer) coverage(content string) rarityMatch {
 		return rarityMatch{share: 1, words: s.words}
 	}
 	lower := strings.ToLower(content)
+	folded := foldAccents(lower)
 	var m rarityMatch
 	var got float64
-	for i, w := range s.q.words {
-		if containsWord(lower, w) {
+	for i := range s.q.words {
+		if containsWord(folded, s.folded[i]) {
 			got += s.wordW[i]
 			m.words++
 		}
@@ -302,7 +324,7 @@ func (s *rarityScorer) coverage(content string) rarityMatch {
 		if isCJKTerm(e) {
 			hit = strings.Contains(content, e)
 		} else {
-			hit = containsWord(lower, e)
+			hit = containsWord(folded, s.folded[len(s.q.words)+i])
 		}
 		if hit {
 			got += s.extraW[i]
@@ -362,6 +384,71 @@ func containsWord(lower, word string) bool {
 		from = start + 1
 	}
 	return false
+}
+
+// foldAccents removes the accents of lowercased text as the word index's
+// tokenizer does: FTS5 unicode61, with its default remove_diacritics 1. A
+// Latin letter with one diacritic is the letter itself ("é" is "e", "ș" is
+// "s", "ơ" is "o", "ſ" is "s"), and the combining marks that tokenizer
+// removes go. What it keeps stays: letters that are not an accented form of
+// another ("ß", "æ", "ø", "ł"), and letters with two diacritics ("ế", "ǖ").
+// TestFoldAccentsMatchesTheWordIndex reads each rune of latinFolds back from
+// the index.
+func foldAccents(lower string) string {
+	for i := 0; i < len(lower); i++ {
+		if lower[i] >= utf8.RuneSelf {
+			return strings.Map(foldAccent, lower)
+		}
+	}
+	return lower
+}
+
+func foldAccent(r rune) rune {
+	for _, block := range latinFolds {
+		if i := int(r - block.first); i >= 0 && i < len(block.to) {
+			switch c := block.to[i]; c {
+			case '.':
+				return r
+			case '-':
+				return -1
+			default:
+				return rune(c)
+			}
+		}
+	}
+	return r
+}
+
+// latinFolds maps runes from first on to the letter the word index reads
+// them as, '-' for a mark it removes, '.' for a rune it keeps.
+var latinFolds = []struct {
+	first rune
+	to    string
+}{
+	{0x00e0, "" + // Latin-1 Supplement, Latin Extended-A and B
+		"aaaaaa.ceeeeiiii.nooooo..uuuuy.y" + // U+00E0
+		"aaaaaaccccccccdd..eeeeeeeeeegggg" + // U+0100
+		"gggghh..iiiiiiiii...jjkk.llllll." + // U+0120
+		"...nnnnnn...oooooo..rrrrrrssssss" + // U+0140
+		"sstttt..uuuuuuuuuuuuwwyyyzzzzzzs" + // U+0160
+		"................................" + // U+0180
+		"oo.............uu..............." + // U+01A0
+		".............aaiioouu..........." + // U+01C0
+		"......ggkkoo....j...gg..nn......" + // U+01E0
+		"aaaaeeeeiiiioooorrrruuuusstt..hh" + // U+0200
+		"......aaee....oo..yy"}, //             U+0220
+	{0x0300, "" + // combining diacritical marks
+		"-----.-------..-.-.........-...." + // U+0300
+		"...------....--.--"}, //               U+0320
+	{0x1e00, "" + // Latin Extended Additional
+		"aabbbbbb..dddddddddd....eeee..ff" + // U+1E00
+		"gghhhhhhhhhhii..kkkkkkll..llllmm" + // U+1E20
+		"mmmmnnnnnnnn........pppprrrr..rr" + // U+1E40
+		"ssss......ttttttttuuuuuu....vvvv" + // U+1E60
+		"wwwwwwwwwwxxxxyyzzzzzzhtwy.s...." + // U+1E80
+		"aaaa....................eeeeee.." + // U+1EA0
+		"........iiiioooo................" + // U+1EC0
+		"....uuuu..........yyyyyyyy"}, //       U+1EE0
 }
 
 // isWordRune is a rune that continues a word for containsWord: a letter or
