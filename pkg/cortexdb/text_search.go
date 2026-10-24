@@ -8,7 +8,7 @@ import (
 	"github.com/liliang-cn/cortexdb/v2/pkg/observability"
 	"github.com/liliang-cn/cortexdb/v2/pkg/sqldialect"
 	"log"
-	"sort"
+	"strings"
 
 	"github.com/liliang-cn/cortexdb/v2/internal/encoding"
 	"github.com/liliang-cn/cortexdb/v2/pkg/core"
@@ -20,6 +20,11 @@ import (
 const defaultSearchTopK = 10
 
 // TextSearchOptions defines options for text-only search.
+//
+// Threshold drops rows whose normalized bm25 is below it. With Keywords or
+// AlternateQueries it applies to each phrasing's own bm25, before the lists
+// are fused; the scores returned are then fused ranks, at most 1/61 for
+// each list that holds the row, not of the threshold's scale.
 type TextSearchOptions struct {
 	Collection       string
 	TopK             int
@@ -428,15 +433,17 @@ func (db *DB) recallAuthorized(
 	return kept, nil
 }
 
+// searchTextOnlyExpanded is SearchTextOnly with keywords or alternate
+// queries: every phrasing runs, and their lists are fused by rank.
 func (db *DB) searchTextOnlyExpanded(ctx context.Context, query string, opts TextSearchOptions) ([]core.ScoredEmbedding, error) {
-	queries := lexicalSearchQueries(query, opts.Keywords, opts.AlternateQueries)
+	queries := fusedPhrasings(query, lexicalSearchQueries(query, opts.Keywords, opts.AlternateQueries))
 	if len(queries) == 0 {
 		return nil, ErrEmptyText
 	}
 
-	merged := make(map[string]core.ScoredEmbedding)
+	var lists [][]core.ScoredEmbedding
 	var firstErr error
-	for idx, searchQuery := range queries {
+	for _, searchQuery := range queries {
 		results, err := db.ftsSearch(ctx, searchQuery, TextSearchOptions{
 			Collection: opts.Collection,
 			TopK:       opts.TopK * 4,
@@ -448,46 +455,74 @@ func (db *DB) searchTextOnlyExpanded(ctx context.Context, query string, opts Tex
 			}
 			continue
 		}
-		if len(results) == 0 {
-			continue
-		}
-
-		scoreWeight := 1.0 - float64(idx)*0.05
-		if scoreWeight < 0.8 {
-			scoreWeight = 0.8
-		}
-		for _, result := range results {
-			result.Score *= scoreWeight
-			if existing, ok := merged[result.ID]; !ok || result.Score > existing.Score {
-				merged[result.ID] = result
-			}
-		}
-		if idx == 0 && len(merged) >= opts.TopK {
-			break
-		}
+		lists = append(lists, results)
 	}
 
-	if len(merged) == 0 {
-		if firstErr != nil {
-			return nil, firstErr
-		}
-		return nil, nil
-	}
-
-	ordered := make([]core.ScoredEmbedding, 0, len(merged))
-	for _, result := range merged {
-		ordered = append(ordered, result)
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		if ordered[i].Score == ordered[j].Score {
-			return ordered[i].ID < ordered[j].ID
-		}
-		return ordered[i].Score > ordered[j].Score
-	})
-	if opts.TopK > 0 && len(ordered) > opts.TopK {
-		ordered = ordered[:opts.TopK]
+	ordered := fuseLexicalLists(opts.TopK, lists...)
+	if len(ordered) == 0 {
+		return nil, firstErr
 	}
 	return ordered, nil
+}
+
+// fusedPhrasings are the queries of a search whose lists fuseLexicalLists
+// merges. The question's own OR query is left out when a keyword OR query
+// holds its words and more: every row it finds, that one finds too, and a
+// row that holds a word of the question would be counted twice for it, above
+// a row found through the keywords alone.
+func fusedPhrasings(question string, queries []string) []string {
+	own := strings.Join(lexicalQueryKeywords(strings.TrimSpace(question)), " OR ")
+	wider := false
+	for _, q := range queries {
+		if q != own && strings.Contains(q, " OR ") && !strings.Contains(q, "*") {
+			wider = true
+		}
+	}
+	if !wider {
+		return queries
+	}
+	kept := make([]string, 0, len(queries))
+	for _, q := range queries {
+		if q != own {
+			kept = append(kept, q)
+		}
+	}
+	return kept
+}
+
+// lexicalFusionK is the constant of the reciprocal rank fusion of a search's
+// phrasings: the usual 60, which SearchTextOnly's own ranking uses too (1/61
+// for a first row).
+const lexicalFusionK = 60
+
+// fuseLexicalLists merges the result lists of a search's phrasings (the
+// question, each alternate query, the keyword OR queries, the CJK bigrams) by
+// reciprocal rank: a row scores the sum of 1/(lexicalFusionK + rank) over the
+// lists that hold it, and the topK best are returned (all when topK is 0).
+//
+// Each query's bm25 is measured against its own terms, so the scores of two
+// queries do not compare: a short row that holds two words of the OR query
+// outscored rows that hold every word of the question. Ranks compare. A row
+// that several phrasings find ranks above one that a single phrasing finds,
+// so a row that only a variant finds comes after the rows the question finds
+// whole.
+func fuseLexicalLists(topK int, lists ...[]core.ScoredEmbedding) []core.ScoredEmbedding {
+	fused := make(map[string]core.ScoredEmbedding)
+	for _, list := range lists {
+		for rank, result := range list {
+			score := 1 / float64(lexicalFusionK+rank+1)
+			if existing, ok := fused[result.ID]; ok {
+				score += existing.Score
+			}
+			result.Score = score
+			fused[result.ID] = result
+		}
+	}
+	rows := make([]core.ScoredEmbedding, 0, len(fused))
+	for _, result := range fused {
+		rows = append(rows, result)
+	}
+	return mergeScoredEmbeddings(topK, rows)
 }
 
 // ftsSearchQuery builds the lexical lookup for one query, returning the same columns either way.
